@@ -1551,9 +1551,19 @@
 
 			console.log(`📋 Найдено ${cards.length} вакансий на странице ${pageNum + 1}`);
 
-			for (const card of cards) {
+			let processedOnPage = 0;
+			let successfulOnPage = 0;
+
+			for (let i = 0; i < cards.length; i++) {
+				const card = cards[i];
+
 				// Проверяем условия остановки
-				if (!STATE.isRunning || STATE.responsesCount >= CONFIG.MAX_RESPONSES_PER_DAY) break;
+				if (!STATE.isRunning || STATE.responsesCount >= CONFIG.MAX_RESPONSES_PER_DAY) {
+					console.log(
+						`🛑 Остановка: isRunning=${STATE.isRunning}, responses=${STATE.responsesCount}/${CONFIG.MAX_RESPONSES_PER_DAY}`
+					);
+					break;
+				}
 
 				// Проверяем паузу
 				while (STATE.isPaused && STATE.isRunning) {
@@ -1564,13 +1574,26 @@
 
 				// Извлекаем данные вакансии
 				const vacancyData = extractVacancyData(card);
-				if (!vacancyData) continue;
+				if (!vacancyData) {
+					console.log(`⚠️ Не удалось извлечь данные вакансии ${i + 1}`);
+					continue;
+				}
+
+				console.log(
+					`🔍 Обрабатываю вакансию ${i + 1}/${cards.length}: ${vacancyData.title} (ID: ${
+						vacancyData.id
+					})`
+				);
 
 				STATE.totalProcessed++;
+				processedOnPage++;
 
 				// Применяем фильтры
 				const filterResult = Filters.shouldSkipVacancy(vacancyData);
 				if (filterResult.skip) {
+					console.log(
+						`⏭️ Пропускаю вакансию ${vacancyData.id}: ${filterResult.reasons.join(', ')}`
+					);
 					Logger.saveLog({
 						id: vacancyData.id,
 						title: vacancyData.title,
@@ -1582,16 +1605,37 @@
 					continue;
 				}
 
+				// Отправляем отклик
+				const beforeCount = STATE.responsesCount;
 				await respondToVacancy(vacancyData.id, vacancyData.title);
 
-				// Умная задержка
-				const delay = Utils.getSmartDelay();
-				await Utils.randomDelay(delay * 0.8, delay * 1.2);
+				// Проверяем, был ли отправлен отклик
+				if (STATE.responsesCount > beforeCount) {
+					successfulOnPage++;
+					console.log(`✅ Отклик отправлен на вакансию ${vacancyData.id}`);
+				} else {
+					console.log(`❌ Отклик не отправлен на вакансию ${vacancyData.id}`);
+				}
+
+				// Умная задержка между вакансиями
+				if (i < cards.length - 1) {
+					// Не делаем задержку после последней вакансии
+					const delay = Utils.getSmartDelay();
+					console.log(`⏳ Задержка ${delay}мс перед следующей вакансией...`);
+					await Utils.randomDelay(delay * 0.8, delay * 1.2);
+				}
 			}
 
-			return true;
+			console.log(
+				`📊 Страница ${
+					pageNum + 1
+				} завершена: обработано ${processedOnPage}, отправлено ${successfulOnPage}`
+			);
+
+			// Возвращаем true только если обработали хотя бы одну вакансию
+			return processedOnPage > 0;
 		} catch (err) {
-			console.error(`Ошибка обработки страницы ${pageNum + 1}:`, err);
+			console.error(`❌ Ошибка обработки страницы ${pageNum + 1}:`, err);
 			STATE.totalErrors++;
 			return false;
 		}
@@ -1610,10 +1654,16 @@
 		const title = link?.innerText?.trim();
 		const href = link?.href;
 
-		if (!title || !href) return null;
+		if (!title || !href) {
+			console.log('⚠️ Не найдена ссылка или заголовок вакансии');
+			return null;
+		}
 
 		const vacancyId = href.match(/vacancy\/(\d+)/)?.[1];
-		if (!vacancyId) return null;
+		if (!vacancyId) {
+			console.log('⚠️ Не удалось извлечь ID вакансии из URL:', href);
+			return null;
+		}
 
 		// Извлекаем дополнительную информацию
 		const salaryElement = card.querySelector('[data-qa="vacancy-serp__vacancy-compensation"]');
@@ -1641,44 +1691,88 @@
 		let pageNum = 0;
 		let hasMorePages = true;
 		let consecutiveErrors = 0;
+		let consecutiveEmptyPages = 0;
 		const maxConsecutiveErrors = 3;
+		const maxConsecutiveEmptyPages = 2;
+		const maxPages = 100; // Ограничение на максимальное количество страниц
 
-		while (hasMorePages && STATE.isRunning && STATE.responsesCount < CONFIG.MAX_RESPONSES_PER_DAY) {
+		console.log(`🚀 Начинаю обработку страниц с URL: ${baseUrl}`);
+
+		while (
+			hasMorePages &&
+			STATE.isRunning &&
+			STATE.responsesCount < CONFIG.MAX_RESPONSES_PER_DAY &&
+			pageNum < maxPages
+		) {
 			// Проверяем паузу
 			while (STATE.isPaused && STATE.isRunning) {
 				await Utils.delay(1000);
 			}
 
-			if (!STATE.isRunning) break;
+			if (!STATE.isRunning) {
+				console.log('🛑 Процесс остановлен пользователем');
+				break;
+			}
 
-			hasMorePages = await processPage(baseUrl, pageNum);
+			console.log(`📄 Переход к странице ${pageNum + 1}...`);
+			const pageProcessed = await processPage(baseUrl, pageNum);
 
-			if (!hasMorePages) {
+			if (!pageProcessed) {
 				consecutiveErrors++;
+				consecutiveEmptyPages++;
+				console.log(
+					`❌ Страница ${
+						pageNum + 1
+					} не обработана. Ошибок подряд: ${consecutiveErrors}, пустых страниц: ${consecutiveEmptyPages}`
+				);
+
 				if (consecutiveErrors >= maxConsecutiveErrors) {
 					console.log('🔚 Слишком много ошибок подряд. Завершаю обработку.');
 					break;
 				}
+
+				if (consecutiveEmptyPages >= maxConsecutiveEmptyPages) {
+					console.log('🔚 Слишком много пустых страниц подряд. Возможно, достигнут конец списка.');
+					break;
+				}
 			} else {
 				consecutiveErrors = 0;
+				consecutiveEmptyPages = 0;
+				console.log(`✅ Страница ${pageNum + 1} успешно обработана`);
 			}
 
 			pageNum++;
 			STATE.currentPage = pageNum;
 
-			if (hasMorePages && STATE.isRunning) {
-				console.log(`⏳ Перехожу к странице ${pageNum + 1}...`);
+			// Проверяем лимиты
+			if (STATE.responsesCount >= CONFIG.MAX_RESPONSES_PER_DAY) {
+				console.log('🔚 Достигнут дневной лимит откликов.');
+				break;
+			}
+
+			if (pageNum >= maxPages) {
+				console.log('🔚 Достигнуто максимальное количество страниц.');
+				break;
+			}
+
+			// Задержка между страницами (только если есть еще страницы для обработки)
+			if (STATE.isRunning && pageProcessed) {
+				console.log(`⏳ Задержка ${CONFIG.DELAY_BETWEEN_PAGES}мс перед следующей страницей...`);
 				await Utils.delay(CONFIG.DELAY_BETWEEN_PAGES);
-			} else if (!hasMorePages) {
-				console.log('✅ Все страницы обработаны!');
-				stopProcess();
 			}
 		}
 
+		console.log(
+			`🏁 Обработка завершена. Всего страниц: ${pageNum}, откликов: ${STATE.responsesCount}`
+		);
+
 		if (STATE.responsesCount >= CONFIG.MAX_RESPONSES_PER_DAY) {
 			console.log('🔚 Достигнут дневной лимит откликов.');
-			stopProcess();
+		} else {
+			console.log('✅ Все доступные страницы обработаны!');
 		}
+
+		stopProcess();
 	}
 
 	// ===== УПРАВЛЕНИЕ ПРОЦЕССОМ =====
