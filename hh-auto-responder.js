@@ -538,30 +538,68 @@
 			progressBar.id = 'hh-progress-bar';
 			progressBar.style.cssText = `
 				position: fixed;
-				top: 20px;
+				top: 32px;
 				left: 50%;
 				transform: translateX(-50%);
-				width: 400px;
-				height: 60px;
-				background: rgba(255, 255, 255, 0.95);
-				border-radius: 12px;
-				box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+				width: 430px;
+				height: 84px;
+				background: rgba(248, 250, 252, 1);
+				border-radius: 16px;
+				box-shadow: 0 8px 32px rgba(16, 185, 129, 0.09), 0 2px 2px rgba(0,0,0,.03);
+				border: 1px solid #e5e7eb;
 				z-index: 10003;
-				padding: 12px;
+				padding: 18px 22px 14px 22px;
 				display: ${STATE.progressVisible ? 'block' : 'none'};
-				backdrop-filter: blur(12px);
-				border: 1px solid rgba(255, 255, 255, 0.2);
+				backdrop-filter: blur(10px);
+				transition: box-shadow .25s;
+				font-family: "Segoe UI", system-ui, sans-serif;
 			`;
 
 			progressBar.innerHTML = `
-				<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-					<span style="font-size: 14px; font-weight: 600; color: #374151;">Прогресс отправки</span>
-					<button id="progress-close" style="background: none; border: none; font-size: 18px; cursor: pointer; color: #6b7280;">×</button>
+				<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+					<span style="font-size: 16px; font-weight: 700; color: #059669; letter-spacing:0.01em;">${'📊 '}Прогресс откликов</span>
+					<button id="progress-close" title="Скрыть" style="background: none; border: none; font-size: 22px; line-height:1; cursor: pointer; color: #9CA3AF; transition: color .16s;">×</button>
 				</div>
-				<div style="width: 100%; height: 20px; background: #f3f4f6; border-radius: 10px; overflow: hidden;">
-					<div class="progress-fill" style="height: 100%; background: linear-gradient(90deg, #10b981, #059669); width: 0%; transition: width 0.3s ease;"></div>
+				<div style="display: flex; align-items: center; gap: 10px;">
+					<div style="flex:1;">
+						<div style="width: 100%; height: 22px; background: #f3f4f6; border-radius: 11px; overflow: hidden; position:relative;">
+							<div class="progress-fill"
+								style="height: 100%; background: linear-gradient(90deg, #10b981 0%, #059669 100%); width: 0%; min-width: 4%; transition: width 0.45s cubic-bezier(.4,2,.6,1);"></div>
+						</div>
+						<div style="display:flex; justify-content:space-between; margin-top:2px;">
+							<div class="progress-text-left" style="font-size:11px; color:#64748b;">0 / 0 (${0}%)</div>
+							<div class="progress-text-right" style="font-size:11px; color:#64748b;"></div>
+						</div>
+					</div>
+					<div style="flex: none; width: 60px; text-align: right;">
+						<div class="progress-badge" style="
+							display:inline-block;
+							background: #ecfdf5;
+							color: #059669;
+							font-weight: bold;
+							font-size: 13px;
+							border-radius: 7px;
+							padding: 2px 10px;
+							border: 1px solid #d1fae5;
+							box-shadow:0 2px 4px rgba(16,185,129,.07);
+							letter-spacing:0.02em;
+							">0%</div>
+					</div>
 				</div>
-				<div class="progress-text" style="text-align: center; margin-top: 4px; font-size: 12px; color: #6b7280;">0/0 (0%)</div>
+				<div style="margin-top: 7px; display:flex; gap:16px; align-items: center; font-size:11.5px; color: #6b7280;">
+					<div class="progress-detail-sent" title="Отправлено" style="display:flex;align-items:center;gap:3px;">
+						<span style="color:#059669;font-size:13px;">⬆️</span> <span class="progress-txt-sent">0</span> откликов
+					</div>
+					<div class="progress-detail-skipped" title="Пропущено" style="display:flex;align-items:center;gap:3px;">
+						<span style="color:#a8a29e;font-size:13px;">⏭️</span> <span class="progress-txt-skipped">0</span> пропущено
+					</div>
+					<div class="progress-detail-errors" title="Ошибок" style="display:flex;align-items:center;gap:3px;">
+						<span style="color:#ef4444;font-size:13px;">⛔</span> <span class="progress-txt-errors">0</span> ошибок
+					</div>
+					<div class="progress-detail-time" title="Время работы" style="margin-left:auto; font-variant-numeric: tabular-nums;">
+						🕒 <span class="progress-txt-runtime">00:00</span>
+					</div>
+				</div>
 			`;
 
 			progressBar.querySelector('#progress-close').onclick = () => {
@@ -929,6 +967,17 @@
 					}, 300);
 				}
 			}, duration);
+		},
+
+		switchModal: () => {
+			const modal = document.getElementById('hh-api-modal');
+			if (modal) {
+				STATE.modalVisible = !STATE.modalVisible;
+				modal.style.display = STATE.modalVisible ? 'block' : 'none';
+				if (STATE.modalVisible) {
+					UI.updateModal();
+				}
+			}
 		},
 
 		openModal: () => {
@@ -1936,7 +1985,7 @@
 
 			// Кнопка статистики
 			const statsBtn = UIBuilder.createControlButton('📊', 'Статистика', '#10b981', () => {
-				UI.openModal();
+				UI.switchModal();
 			});
 
 			// Кнопка экспорта
