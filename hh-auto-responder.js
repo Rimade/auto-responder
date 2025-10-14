@@ -19,12 +19,21 @@
 		MAX_RETRIES: 3,
 		RETRY_DELAY: 2000,
 
+		// Новые настройки фильтрации
+		MIN_SALARY: 0, // Минимальная зарплата
+		MAX_SALARY: 0, // Максимальная зарплата (0 = без ограничений)
+		SKIP_WITHOUT_SALARY: false, // Пропускать вакансии без указания зарплаты
+		BLACKLIST_COMPANIES: [], // Список компаний для исключения
+		REQUIRED_KEYWORDS: [], // Обязательные ключевые слова в описании
+		EXCLUDED_KEYWORDS: [], // Исключающие ключевые слова
+
 		// LocalStorage keys
 		FILTER_URL_KEY: 'hh_filter_url',
 		LOG_KEY: 'hh_api_log',
 		SENT_RESPONSES_KEY: 'hh_sent_responses',
 		STATS_KEY: 'hh_stats',
 		SETTINGS_KEY: 'hh_settings',
+		CONFIG_KEY: 'hh_config',
 	};
 
 	// ===== СОСТОЯНИЕ =====
@@ -33,12 +42,17 @@
 		responsesCount: 0,
 		currentPage: 0,
 		totalProcessed: 0,
+		totalSkipped: 0,
 		startTime: null,
+		uiCollapsed: false,
+		modalVisible: true,
 		settings: {
 			autoFindResume: true,
 			showNotifications: true,
 			soundEnabled: true,
 			darkMode: false,
+			enableFilters: true,
+			pauseOnError: false,
 		},
 	};
 
@@ -110,23 +124,138 @@
 				console.log('Не удалось воспроизвести звук');
 			}
 		},
+
+		// Улучшенная функция для получения статистики
+		getFormattedStats: () => {
+			const stats = Logger.getStats();
+			const sentCount = Responses.getSentCount();
+			const runningTime = stats.runningTime ? Math.floor(stats.runningTime / 1000) : 0;
+
+			return {
+				totalSent: stats.totalSent || 0,
+				totalProcessed: stats.totalProcessed || 0,
+				totalSkipped: stats.totalSkipped || 0,
+				allTimeSent: sentCount,
+				runningTime: Utils.formatTime(runningTime * 1000),
+				successRate:
+					stats.totalProcessed > 0 ? Math.round((stats.totalSent / stats.totalProcessed) * 100) : 0,
+			};
+		},
+
+		// Новая функция для парсинга зарплаты
+		parseSalary: (salaryText) => {
+			if (!salaryText) return null;
+
+			const cleanText = salaryText.replace(/\s/g, '').replace(/₽|руб/g, '');
+			const numbers = cleanText.match(/\d+/g);
+
+			if (!numbers) return null;
+
+			if (cleanText.includes('от')) {
+				return { from: parseInt(numbers[0]), to: null };
+			} else if (cleanText.includes('до')) {
+				return { from: null, to: parseInt(numbers[0]) };
+			} else if (numbers.length >= 2) {
+				return { from: parseInt(numbers[0]), to: parseInt(numbers[1]) };
+			} else {
+				return { from: parseInt(numbers[0]), to: parseInt(numbers[0]) };
+			}
+		},
+
+		// Функция сохранения конфигурации
+		saveConfig: () => {
+			localStorage.setItem(CONFIG.CONFIG_KEY, JSON.stringify(CONFIG));
+		},
+
+		// Функция загрузки конфигурации
+		loadConfig: () => {
+			const saved = localStorage.getItem(CONFIG.CONFIG_KEY);
+			if (saved) {
+				const savedConfig = JSON.parse(saved);
+				Object.assign(CONFIG, savedConfig);
+			}
+		},
 	};
 
-	// ===== АВТОРИЗАЦИЯ =====
-	const Auth = {
-		getDebugInfo: () => {
-			let info = '🔍 ДИАГНОСТИКА СИСТЕМЫ\n\n';
-			info += `📍 Текущий URL: ${window.location.href}\n`;
-			info += `📄 RESUME_HASH: ${CONFIG.RESUME_HASH ? '✅ Указан' : '❌ Не указан'}\n`;
-			if (CONFIG.RESUME_HASH) {
-				info += `   Значение: ${CONFIG.RESUME_HASH}\n`;
-			}
-			info += `\n📊 Статистика:\n`;
-			info += `- Отправлено откликов: ${STATE.responsesCount}\n`;
-			info += `- Обработано вакансий: ${STATE.totalProcessed}\n`;
-			info += `- Всего отправлено: ${Responses.getSentCount()}\n`;
+	// ===== ФИЛЬТРЫ =====
+	const Filters = {
+		checkSalary: (salary) => {
+			if (!STATE.settings.enableFilters) return true;
 
-			return info;
+			if (!salary && CONFIG.SKIP_WITHOUT_SALARY) {
+				return false;
+			}
+
+			if (!salary) return true;
+
+			const parsedSalary = Utils.parseSalary(salary);
+			if (!parsedSalary) return true;
+
+			if (CONFIG.MIN_SALARY > 0) {
+				const salaryValue = parsedSalary.to || parsedSalary.from;
+				if (salaryValue && salaryValue < CONFIG.MIN_SALARY) {
+					return false;
+				}
+			}
+
+			if (CONFIG.MAX_SALARY > 0) {
+				const salaryValue = parsedSalary.from || parsedSalary.to;
+				if (salaryValue && salaryValue > CONFIG.MAX_SALARY) {
+					return false;
+				}
+			}
+
+			return true;
+		},
+
+		checkCompany: (companyName) => {
+			if (!STATE.settings.enableFilters || !companyName) return true;
+
+			return !CONFIG.BLACKLIST_COMPANIES.some((blacklisted) =>
+				companyName.toLowerCase().includes(blacklisted.toLowerCase())
+			);
+		},
+
+		checkKeywords: (title, description = '') => {
+			if (!STATE.settings.enableFilters) return true;
+
+			const text = (title + ' ' + description).toLowerCase();
+
+			// Проверяем обязательные ключевые слова
+			if (CONFIG.REQUIRED_KEYWORDS.length > 0) {
+				const hasRequired = CONFIG.REQUIRED_KEYWORDS.some((keyword) =>
+					text.includes(keyword.toLowerCase())
+				);
+				if (!hasRequired) return false;
+			}
+
+			// Проверяем исключающие ключевые слова
+			if (CONFIG.EXCLUDED_KEYWORDS.length > 0) {
+				const hasExcluded = CONFIG.EXCLUDED_KEYWORDS.some((keyword) =>
+					text.includes(keyword.toLowerCase())
+				);
+				if (hasExcluded) return false;
+			}
+
+			return true;
+		},
+
+		shouldSkipVacancy: (vacancyData) => {
+			const reasons = [];
+
+			if (!Filters.checkSalary(vacancyData.salary)) {
+				reasons.push('зарплата не соответствует критериям');
+			}
+
+			if (!Filters.checkCompany(vacancyData.company)) {
+				reasons.push('компания в черном списке');
+			}
+
+			if (!Filters.checkKeywords(vacancyData.title, vacancyData.description)) {
+				reasons.push('не соответствует ключевым словам');
+			}
+
+			return reasons.length > 0 ? reasons : null;
 		},
 	};
 
@@ -180,10 +309,13 @@
 		},
 
 		clearLogs: () => {
-			localStorage.removeItem(CONFIG.LOG_KEY);
-			localStorage.removeItem(CONFIG.SENT_RESPONSES_KEY);
-			localStorage.removeItem(CONFIG.STATS_KEY);
-			UI.updateModal();
+			if (confirm('Вы уверены, что хотите очистить все логи и статистику?')) {
+				localStorage.removeItem(CONFIG.LOG_KEY);
+				localStorage.removeItem(CONFIG.SENT_RESPONSES_KEY);
+				localStorage.removeItem(CONFIG.STATS_KEY);
+				UI.updateModal();
+				UI.showNotification('Очищено', 'Все логи и статистика удалены', 'success');
+			}
 		},
 	};
 
@@ -208,7 +340,10 @@
 		},
 
 		clearSentResponses: () => {
-			localStorage.removeItem(CONFIG.SENT_RESPONSES_KEY);
+			if (confirm('Вы уверены, что хотите очистить список отправленных откликов?')) {
+				localStorage.removeItem(CONFIG.SENT_RESPONSES_KEY);
+				UI.showNotification('Очищено', 'Список отправленных откликов очищен', 'success');
+			}
 		},
 	};
 
@@ -233,7 +368,7 @@
 					z-index: 10001;
 					font-family: system-ui, -apple-system, sans-serif;
 					padding: 20px;
-					display: block;
+					display: ${STATE.modalVisible ? 'block' : 'none'};
 					backdrop-filter: blur(12px);
 					transition: all 0.3s ease;
 				`;
@@ -371,12 +506,16 @@
 					<div id="hh-api-stats"></div>
 				`;
 
-				// Добавляем обработчик закрытия
+				// Обработчик скрытия: обновляем только отображение, не удаляем возможность открытия снова
 				modal.querySelector('#hh-api-modal-close').onclick = () => {
+					STATE.modalVisible = false;
 					modal.style.display = 'none';
 				};
 
 				document.body.appendChild(modal);
+			} else {
+				// Обновляем видимость при повторных вызовах
+				modal.style.display = STATE.modalVisible ? 'block' : 'none';
 			}
 			return modal;
 		},
@@ -421,28 +560,34 @@
 
 			// Обновляем статистику
 			if (statsDiv) {
-				const stats = Logger.getStats();
-				const runningTime = stats.runningTime ? Math.floor(stats.runningTime / 1000) : 0;
-				const sentCount = Responses.getSentCount();
+				const formattedStats = Utils.getFormattedStats();
 
 				statsDiv.innerHTML = `
 					<div style="font-weight: 600; margin-bottom: 8px; color: #1e293b;">📊 Статистика</div>
 					<div id="hh-api-stats-grid">
 						<div id="hh-api-stats-item">
 							<span id="hh-api-stats-label">Отправлено:</span>
-							<span id="hh-api-stats-value">${stats.totalSent || 0}</span>
+							<span id="hh-api-stats-value">${formattedStats.totalSent}</span>
 						</div>
 						<div id="hh-api-stats-item">
 							<span id="hh-api-stats-label">Обработано:</span>
-							<span id="hh-api-stats-value">${stats.totalProcessed || 0}</span>
+							<span id="hh-api-stats-value">${formattedStats.totalProcessed}</span>
+						</div>
+						<div id="hh-api-stats-item">
+							<span id="hh-api-stats-label">Пропущено:</span>
+							<span id="hh-api-stats-value">${formattedStats.totalSkipped}</span>
 						</div>
 						<div id="hh-api-stats-item">
 							<span id="hh-api-stats-label">Всего отправлено:</span>
-							<span id="hh-api-stats-value">${sentCount}</span>
+							<span id="hh-api-stats-value">${formattedStats.allTimeSent}</span>
 						</div>
 						<div id="hh-api-stats-item">
-							<span id="hh-api-stats-label">Время:</span>
-							<span id="hh-api-stats-value">${Utils.formatTime(runningTime * 1000)}</span>
+							<span id="hh-api-stats-label">Успешность:</span>
+							<span id="hh-api-stats-value">${formattedStats.successRate}%</span>
+						</div>
+						<div id="hh-api-stats-item" style="grid-column: 1 / -1;">
+							<span id="hh-api-stats-label">Время работы:</span>
+							<span id="hh-api-stats-value">${formattedStats.runningTime}</span>
 						</div>
 					</div>
 				`;
@@ -486,9 +631,18 @@
 			setTimeout(() => {
 				notification.style.transform = 'translateX(400px)';
 				setTimeout(() => {
-					document.body.removeChild(notification);
+					if (document.body.contains(notification)) {
+						document.body.removeChild(notification);
+					}
 				}, 300);
 			}, 4000);
+		},
+
+		// Новая функция для открытия модалки
+		openModal: () => {
+			STATE.modalVisible = true;
+			const modal = document.getElementById('hh-api-modal');
+			if (modal) modal.style.display = 'block';
 		},
 	};
 
@@ -597,6 +751,7 @@
 						message: 'Лимит превышен',
 					});
 					stopProcess();
+					UI.showNotification('Лимит превышен', 'Достигнут дневной лимит откликов', 'error');
 					return;
 				} else if (errorCode === 'test-required') {
 					Logger.saveLog({
@@ -642,7 +797,7 @@
 				await Utils.delay(CONFIG.RETRY_DELAY);
 				return respondToVacancy(vacancyId, title, retryCount + 1);
 			} else {
-				saveLog({
+				Logger.saveLog({
 					id: vacancyId,
 					title,
 					time: new Date().toISOString(),
@@ -679,13 +834,19 @@
 			const parser = new DOMParser();
 			const doc = parser.parseFromString(text, 'text/html');
 
-			// Ищем вакансии разными способами
+			// Улучшенный поиск вакансий с несколькими селекторами
 			let cards = doc.querySelectorAll('[data-qa="vacancy-serp__vacancy"]');
 			if (cards.length === 0) {
 				cards = doc.querySelectorAll('.vacancy-serp-item');
 			}
 			if (cards.length === 0) {
-				cards = doc.querySelectorAll('[data-qa="serp-item__title"]');
+				cards = doc
+					.querySelectorAll('[data-qa="serp-item__title"]')
+					.map((link) => link.closest('[data-qa*="vacancy"]') || link.parentElement);
+			}
+			if (cards.length === 0) {
+				// Последняя попытка - ищем по структуре
+				cards = doc.querySelectorAll('div[data-qa*="vacancy"], article[data-qa*="vacancy"]');
 			}
 
 			if (cards.length === 0) {
@@ -698,8 +859,16 @@
 			for (const card of cards) {
 				if (!STATE.isRunning || STATE.responsesCount >= CONFIG.MAX_RESPONSES_PER_DAY) break;
 
-				const link = card.querySelector("a[data-qa='serp-item__title']");
-				const title = link?.innerText.trim();
+				// Улучшенный поиск ссылки на вакансию
+				let link = card.querySelector("a[data-qa='serp-item__title']");
+				if (!link) {
+					link = card.querySelector("a[href*='/vacancy/']");
+				}
+				if (!link) {
+					link = card.querySelector('h3 a, .vacancy-serp-item__row_header a');
+				}
+
+				const title = link?.innerText?.trim();
 				const href = link?.href;
 
 				if (!title || !href) continue;
@@ -765,25 +934,25 @@
 			btn.style.background = 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)';
 		}
 		Logger.updateStats();
-		UI.showNotification('Остановлено', 'Отправка откликов остановлена', 'info');
+
+		const stats = Utils.getFormattedStats();
+		UI.showNotification(
+			'Остановлено',
+			`Отправлено ${stats.totalSent} из ${stats.totalProcessed} вакансий`,
+			'info'
+		);
 	}
 
 	function startProcess(url) {
 		// Проверяем RESUME_HASH
 		if (!CONFIG.RESUME_HASH) {
 			alert(
-				'❌ ОШИБКА: Не указан RESUME_HASH в конфигурации!\n\nПожалуйста, откройте консоль разработчика (F12) и найдите хеш вашего резюме в запросах к API.'
+				'❌ ОШИБКА: Не указан RESUME_HASH в конфигурации!\n\nПожалуйста, найдите хеш вашего резюме и укажите его в настройках скрипта.'
 			);
 			return;
 		}
 
-		// Упрощенная проверка - только RESUME_HASH
-		if (!CONFIG.RESUME_HASH) {
-			alert('❌ ОШИБКА: Не указан RESUME_HASH в конфигурации!');
-			return;
-		}
-
-		console.log('✅ Авторизация успешна, начинаю обработку...');
+		console.log('✅ Начинаю обработку вакансий...');
 		console.log('🔍 URL для обработки:', url);
 
 		STATE.responsesCount = 0;
@@ -798,7 +967,8 @@
 			btn.style.background = 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)';
 		}
 
-		UI.createModal();
+		UI.openModal();
+		UI.showNotification('Запущено', 'Начинаю отправку откликов', 'success');
 		processAllPages(url);
 	}
 
@@ -853,6 +1023,7 @@
 				box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
 				transition: all 0.3s ease;
 				outline: none;
+				box-sizing: border-box;
 			`;
 
 			input.onfocus = () => {
@@ -899,8 +1070,10 @@
 			`;
 
 			btn.onmouseover = () => {
-				btn.style.transform = 'translateY(-2px)';
-				btn.style.boxShadow = '0 6px 20px rgba(59, 130, 246, 0.4)';
+				if (!STATE.isRunning) {
+					btn.style.transform = 'translateY(-2px)';
+					btn.style.boxShadow = '0 6px 20px rgba(59, 130, 246, 0.4)';
+				}
 			};
 
 			btn.onmouseout = () => {
@@ -925,6 +1098,8 @@
 					return;
 				}
 
+				// ПРИ НАЖАТИИ КНОПКИ ПОВТОРНО ВКЛЮЧАЕМ МОДАЛКУ!
+				UI.openModal();
 				startProcess(url);
 			};
 
@@ -935,7 +1110,7 @@
 			const container = document.createElement('div');
 			container.style.cssText = `
 				display: grid;
-				grid-template-columns: 1fr 1fr;
+				grid-template-columns: 1fr 1fr 1fr;
 				gap: 8px;
 			`;
 
@@ -970,10 +1145,40 @@
 				UI.showNotification('Успех', 'Логи экспортированы', 'success');
 			};
 
-			// Кнопка диагностики
-			const debugBtn = document.createElement('button');
-			debugBtn.textContent = '🔍 Диагностика';
-			debugBtn.style.cssText = `
+			// Кнопка очистки
+			const clearBtn = document.createElement('button');
+			clearBtn.textContent = '🗑️ Очистить';
+			clearBtn.style.cssText = `
+				padding: 10px;
+				background: #ef4444;
+				color: #fff;
+				border: none;
+				border-radius: 8px;
+				font-family: system-ui, -apple-system, sans-serif;
+				font-size: 12px;
+				font-weight: 500;
+				cursor: pointer;
+				transition: all 0.2s ease;
+			`;
+
+			clearBtn.onmouseover = () => {
+				clearBtn.style.background = '#dc2626';
+				clearBtn.style.transform = 'translateY(-1px)';
+			};
+
+			clearBtn.onmouseout = () => {
+				clearBtn.style.background = '#ef4444';
+				clearBtn.style.transform = 'translateY(0)';
+			};
+
+			clearBtn.onclick = () => {
+				Logger.clearLogs();
+			};
+
+			// Кнопка статистики
+			const statsBtn = document.createElement('button');
+			statsBtn.textContent = '📈 Статистика';
+			statsBtn.style.cssText = `
 				padding: 10px;
 				background: #10b981;
 				color: #fff;
@@ -986,31 +1191,41 @@
 				transition: all 0.2s ease;
 			`;
 
-			debugBtn.onmouseover = () => {
-				debugBtn.style.background = '#059669';
-				debugBtn.style.transform = 'translateY(-1px)';
+			statsBtn.onmouseover = () => {
+				statsBtn.style.background = '#059669';
+				statsBtn.style.transform = 'translateY(-1px)';
 			};
 
-			debugBtn.onmouseout = () => {
-				debugBtn.style.background = '#10b981';
-				debugBtn.style.transform = 'translateY(0)';
+			statsBtn.onmouseout = () => {
+				statsBtn.style.background = '#10b981';
+				statsBtn.style.transform = 'translateY(0)';
 			};
 
-			debugBtn.onclick = () => {
-				const debugInfo = Auth.getDebugInfo();
-				console.log(debugInfo);
-				alert(debugInfo);
+			statsBtn.onclick = () => {
+				const stats = Utils.getFormattedStats();
+				const info =
+					`📊 СТАТИСТИКА РАБОТЫ\n\n` +
+					`📤 Отправлено откликов: ${stats.totalSent}\n` +
+					`📋 Обработано вакансий: ${stats.totalProcessed}\n` +
+					`📈 Всего отправлено: ${stats.allTimeSent}\n` +
+					`✅ Успешность: ${stats.successRate}%\n` +
+					`⏱️ Время работы: ${stats.runningTime}\n\n` +
+					`🔧 RESUME_HASH: ${CONFIG.RESUME_HASH ? '✅ Указан' : '❌ Не указан'}`;
+
+				console.log(info);
+				alert(info);
 			};
 
 			container.appendChild(exportBtn);
-			container.appendChild(debugBtn);
+			container.appendChild(clearBtn);
+			container.appendChild(statsBtn);
 			return container;
 		},
 	};
 
 	// ===== ИНИЦИАЛИЗАЦИЯ =====
 	function init() {
-		console.log('🚀 HH.ru Auto Responder v2.0 загружен');
+		console.log('🚀 HH.ru Auto Responder v2.1 загружен');
 
 		// Проверяем конфигурацию
 		if (!CONFIG.RESUME_HASH) {
@@ -1030,11 +1245,9 @@
 		UIBuilder.createMainInterface();
 
 		// Восстанавливаем статистику
-		const stats = JSON.parse(localStorage.getItem(CONFIG.STATS_KEY) || '{}');
-		if (stats.totalSent > 0) {
-			console.log(
-				`📊 Статистика: отправлено ${stats.totalSent} откликов, обработано ${stats.totalProcessed} вакансий`
-			);
+		const stats = Utils.getFormattedStats();
+		if (stats.allTimeSent > 0) {
+			console.log(`📊 Статистика: всего отправлено ${stats.allTimeSent} откликов`);
 		}
 	}
 
@@ -1058,6 +1271,7 @@
 					if (firstResume.hash) {
 						console.log('✅ Автоматически найден RESUME_HASH:', firstResume.hash);
 						CONFIG.RESUME_HASH = firstResume.hash;
+						UI.showNotification('Успех', 'RESUME_HASH найден автоматически!', 'success');
 						return;
 					}
 				}
