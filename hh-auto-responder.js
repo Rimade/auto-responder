@@ -53,6 +53,7 @@
 		settingsVisible: false,
 		progressVisible: true,
 		currentVacancy: null,
+		consecutiveFailures: 0,
 		settings: {
 			autoFindResume: true,
 			showNotifications: true,
@@ -64,6 +65,7 @@
 			smartDelay: true,
 			skipDuplicates: true,
 			detailedLogging: true,
+			hideUIOnLoad: true,
 		},
 	};
 
@@ -80,6 +82,165 @@
 			} catch {
 				return false;
 			}
+		},
+
+		// Универсальная логика определения страниц: анализирует URL и путь для определения типа страницы
+		// Это позволяет адаптировать поведение скрипта под разные разделы сайта HH.ru
+		// Поддерживает: вакансии, поиск, работодатели, резюме и другие страницы
+		detectPageType: () => {
+			const url = window.location.href;
+			const path = window.location.pathname;
+
+			// Главная страница HH.ru
+			if (path === '/' || path === '' || url === 'https://hh.ru/' || url === 'https://www.hh.ru/') {
+				return 'home';
+			}
+
+			// Страница вакансии
+			if (path.includes('/vacancy/')) {
+				return 'vacancy';
+			}
+
+			// Страница поиска вакансий
+			if (path.includes('/search/vacancy') || url.includes('search/vacancy')) {
+				return 'search';
+			}
+
+			// Страница работодателя
+			if (path.includes('/employer/')) {
+				return 'employer';
+			}
+
+			// Страница резюме
+			if (path.includes('/resume/')) {
+				return 'resume';
+			}
+
+			// Другие страницы
+			return 'other';
+		},
+
+		// Fallback-механизмы получения ID вакансии: множественные источники данных
+		// Сначала пытаемся извлечь из URL, затем из DOM-элементов страницы
+		// Это обеспечивает надежность при разных типах страниц и изменениях разметки
+		getVacancyId: () => {
+			// Из URL
+			const urlMatch = window.location.pathname.match(/\/vacancy\/(\d+)/);
+			if (urlMatch) {
+				return urlMatch[1];
+			}
+
+			// Из элементов страницы (для страницы вакансии)
+			const vacancyElement =
+				document.querySelector('[data-qa="vacancy-id"]') ||
+				document.querySelector('[data-vacancy-id]') ||
+				document.querySelector('meta[property="og:url"]');
+
+			if (vacancyElement) {
+				const content = vacancyElement.getAttribute('content') || vacancyElement.textContent;
+				const idMatch = content.match(/\/vacancy\/(\d+)/);
+				if (idMatch) {
+					return idMatch[1];
+				}
+			}
+
+			return null;
+		},
+
+		// Fallback-механизмы получения данных вакансии: множественные селекторы для каждого поля
+		// HH.ru часто меняет атрибуты data-qa, поэтому используем запасные варианты
+		// Это обеспечивает стабильную работу при обновлениях интерфейса сайта
+		getCurrentVacancyData: () => {
+			const vacancyId = Utils.getVacancyId();
+			if (!vacancyId) return null;
+
+			// Название вакансии
+			const titleElement =
+				document.querySelector('[data-qa="vacancy-title"]') ||
+				document.querySelector('h1[data-qa="bloko-header-1"]') ||
+				document.querySelector('h1');
+
+			const title = titleElement?.textContent?.trim() || 'Неизвестная вакансия';
+
+			// Компания
+			const companyElement =
+				document.querySelector('[data-qa="vacancy-company-name"]') ||
+				document.querySelector('[data-qa="vacancy-company"] a');
+
+			const company = companyElement?.textContent?.trim() || '';
+
+			// Зарплата
+			const salaryElement =
+				document.querySelector('[data-qa="vacancy-salary"]') ||
+				document.querySelector('[data-qa="vacancy-salary-compensation"]');
+
+			const salary = salaryElement?.textContent?.trim() || '';
+
+			return {
+				id: vacancyId,
+				title,
+				company,
+				salary,
+				description: '', // Для страницы вакансии описание обычно не нужно для фильтров
+				href: window.location.href,
+			};
+		},
+
+		// Проверки элементов страницы: универсальный поиск кнопки отклика с множественными селекторами
+		// HH.ru часто меняет структуру DOM, поэтому используем несколько вариантов селекторов
+		// Это fallback-механизм для надежного определения возможности отклика
+		hasRespondButton: () => {
+			const selectors = [
+				'[data-qa="vacancy-response-link"]',
+				'[data-qa="vacancy-response"]',
+				'.vacancy-response__button',
+				'button[data-qa*="response"]',
+				'a[href*="response"]',
+				'.HH-VacancyResponse-Link',
+				'[data-qa="respond-button"]',
+			];
+
+			return selectors.some((selector) => document.querySelector(selector));
+		},
+
+		// Проверки элементов страницы: комплексная проверка закрытия вакансии
+		// Использует множественные подходы: проверка CSS-селекторов и анализ текста
+		// Fallback-механизм для случаев, когда HH.ru меняет структуру разметки
+		isVacancyClosed: () => {
+			const closedSelectors = [
+				'[data-qa="vacancy-closed"]',
+				'.vacancy-closed',
+				'.HH-VacancyClosed',
+				'.vacancy-status_closed',
+			];
+
+			const closedTextSelectors = [
+				'.bloko-text',
+				'.vacancy-description',
+				'[data-qa="vacancy-description"]',
+			];
+
+			// Проверяем наличие элементов "закрыто"
+			if (closedSelectors.some((selector) => document.querySelector(selector))) {
+				return true;
+			}
+
+			// Проверяем текст на наличие слов о закрытии
+			for (const selector of closedTextSelectors) {
+				const element = document.querySelector(selector);
+				if (element) {
+					const text = element.textContent.toLowerCase();
+					if (
+						text.includes('вакансия закрыта') ||
+						text.includes('отклики закрыты') ||
+						text.includes('не актуальна')
+					) {
+						return true;
+					}
+				}
+			}
+
+			return false;
 		},
 
 		getXsrfToken: () => {
@@ -474,11 +635,13 @@
 	// ===== УПРАВЛЕНИЕ ОТКЛИКАМИ =====
 	const Responses = {
 		isAlreadyResponded: (vacancyId) => {
+			if (!vacancyId) return false;
 			const sentResponses = JSON.parse(localStorage.getItem(CONFIG.SENT_RESPONSES_KEY) || '[]');
 			return sentResponses.includes(vacancyId);
 		},
 
 		markAsResponded: (vacancyId) => {
+			if (!vacancyId) return;
 			const sentResponses = JSON.parse(localStorage.getItem(CONFIG.SENT_RESPONSES_KEY) || '[]');
 			if (!sentResponses.includes(vacancyId)) {
 				sentResponses.push(vacancyId);
@@ -515,19 +678,42 @@
 		update: () => {
 			if (!STATE.progressVisible) return;
 
-			const progressBar = document.getElementById('hh-progress-bar');
-			if (!progressBar) return;
+			try {
+				const progressBar = document.getElementById('hh-progress-bar');
+				if (!progressBar) return;
 
-			const stats = Utils.getFormattedStats();
-			const percentage =
-				STATE.totalProcessed > 0
-					? Math.round((STATE.responsesCount / STATE.totalProcessed) * 100)
-					: 0;
+				const stats = Utils.getFormattedStats();
+				const percentage =
+					STATE.totalProcessed > 0
+						? Math.round((STATE.responsesCount / STATE.totalProcessed) * 100)
+						: 0;
 
-			progressBar.querySelector('.progress-fill').style.width = `${Math.min(percentage, 100)}%`;
-			progressBar.querySelector(
-				'.progress-text'
-			).textContent = `${stats.totalSent}/${stats.totalProcessed} (${stats.successRate}%)`;
+				// Обновляем текст в progress-text-left (в HTML это .progress-text-left)
+				const progressTextLeft = progressBar.querySelector('.progress-text-left');
+				if (progressTextLeft) {
+					progressTextLeft.textContent = `${stats.totalSent} / ${stats.totalProcessed} (${percentage}%)`;
+				}
+
+				// Обновляем все элементы прогресс-бара
+				const progressFill = progressBar.querySelector('.progress-fill');
+				const progressText = progressBar.querySelector('.progress-text');
+				const progressBadge = progressBar.querySelector('.progress-badge');
+				const progressTxtSent = progressBar.querySelector('.progress-txt-sent');
+				const progressTxtSkipped = progressBar.querySelector('.progress-txt-skipped');
+				const progressTxtErrors = progressBar.querySelector('.progress-txt-errors');
+				const progressTxtRuntime = progressBar.querySelector('.progress-txt-runtime');
+
+				if (progressFill) progressFill.style.width = `${Math.min(percentage, 100)}%`;
+				if (progressText)
+					progressText.textContent = `${stats.totalSent}/${stats.totalProcessed} (${stats.successRate}%)`;
+				if (progressBadge) progressBadge.textContent = `${percentage}%`;
+				if (progressTxtSent) progressTxtSent.textContent = stats.totalSent;
+				if (progressTxtSkipped) progressTxtSkipped.textContent = stats.totalSkipped;
+				if (progressTxtErrors) progressTxtErrors.textContent = stats.totalErrors;
+				if (progressTxtRuntime) progressTxtRuntime.textContent = stats.runningTime;
+			} catch (error) {
+				console.error('Ошибка обновления прогресса:', error);
+			}
 		},
 
 		create: () => {
@@ -818,86 +1004,98 @@
 			if (!list) return;
 
 			// Обновляем текущий статус
-			if (statusDiv) {
-				if (STATE.isRunning) {
-					statusDiv.style.display = 'block';
-					statusDiv.innerHTML = STATE.isPaused
-						? '⏸️ Приостановлено'
-						: `🔄 Обрабатывается: ${STATE.currentVacancy || 'загрузка...'}`;
-				} else {
-					statusDiv.style.display = 'none';
+			try {
+				if (statusDiv) {
+					if (STATE.isRunning) {
+						statusDiv.style.display = 'block';
+						statusDiv.innerHTML = STATE.isPaused
+							? '⏸️ Приостановлено'
+							: `🔄 Обрабатывается: ${STATE.currentVacancy || 'загрузка...'}`;
+					} else {
+						statusDiv.style.display = 'none';
+					}
 				}
+			} catch (error) {
+				console.error('Ошибка обновления статуса:', error);
 			}
 
 			// Добавляем новую запись
-			if (entry) {
-				const li = document.createElement('li');
-				li.className = 'log-item';
+			try {
+				if (entry) {
+					const li = document.createElement('li');
+					li.className = 'log-item';
 
-				const symbol = entry.success ? '✅' : '❌';
-				const a = document.createElement('a');
-				a.className = 'log-link';
-				a.href = `https://hh.ru/vacancy/${entry.id}`;
-				a.textContent = entry.title + (entry.message ? ` (${entry.message})` : '');
-				a.target = '_blank';
+					const symbol = entry.success ? '✅' : '❌';
+					const a = document.createElement('a');
+					a.className = 'log-link';
+					a.href = `https://hh.ru/vacancy/${entry.id}`;
+					a.textContent = entry.title + (entry.message ? ` (${entry.message})` : '');
+					a.target = '_blank';
 
-				const timeSpan = document.createElement('span');
-				timeSpan.className = 'log-time';
-				timeSpan.textContent = new Date(entry.time).toLocaleTimeString();
+					const timeSpan = document.createElement('span');
+					timeSpan.className = 'log-time';
+					timeSpan.textContent = new Date(entry.time).toLocaleTimeString();
 
-				const symbolSpan = document.createElement('span');
-				symbolSpan.className = 'log-symbol';
-				symbolSpan.textContent = symbol;
+					const symbolSpan = document.createElement('span');
+					symbolSpan.className = 'log-symbol';
+					symbolSpan.textContent = symbol;
 
-				li.appendChild(symbolSpan);
-				li.appendChild(a);
-				li.appendChild(timeSpan);
-				list.insertBefore(li, list.firstChild);
+					li.appendChild(symbolSpan);
+					li.appendChild(a);
+					li.appendChild(timeSpan);
+					list.insertBefore(li, list.firstChild);
 
-				// Ограничиваем количество записей
-				while (list.children.length > 15) {
-					list.removeChild(list.lastChild);
+					// Ограничиваем количество записей
+					while (list.children.length > 15) {
+						list.removeChild(list.lastChild);
+					}
 				}
+			} catch (error) {
+				console.error('Ошибка добавления записи в лог:', error);
 			}
 
 			// Обновляем статистику
-			if (statsGrid) {
-				const formattedStats = Utils.getFormattedStats();
+			try {
+				if (statsGrid) {
+					const formattedStats = Utils.getFormattedStats();
 
-				statsGrid.innerHTML = `
-					<div class="stats-item">
-						<span class="stats-label">Отправлено:</span>
-						<span class="stats-value">${formattedStats.totalSent}</span>
-					</div>
-					<div class="stats-item">
-						<span class="stats-label">Обработано:</span>
-						<span class="stats-value">${formattedStats.totalProcessed}</span>
-					</div>
-					<div class="stats-item">
-						<span class="stats-label">Пропущено:</span>
-						<span class="stats-value">${formattedStats.totalSkipped}</span>
-					</div>
-					<div class="stats-item">
-						<span class="stats-label">Ошибки:</span>
-						<span class="stats-value">${formattedStats.totalErrors}</span>
-					</div>
-					<div class="stats-item">
-						<span class="stats-label">Всего отправлено:</span>
-						<span class="stats-value">${Utils.formatNumber(formattedStats.allTimeSent)}</span>
-					</div>
-					<div class="stats-item">
-						<span class="stats-label">Успешность:</span>
-						<span class="stats-value">${formattedStats.successRate}%</span>
-					</div>
-					<div class="stats-item" style="grid-column: 1 / -1;">
-						<span class="stats-label">Время работы:</span>
-						<span class="stats-value">${formattedStats.runningTime}</span>
-					</div>
-					<div class="stats-item" style="grid-column: 1 / -1;">
-						<span class="stats-label">Сегодня отправлено:</span>
-						<span class="stats-value">${Responses.getSentToday()}</span>
-					</div>
-				`;
+					statsGrid.innerHTML = `
+						<div class="stats-item">
+							<span class="stats-label">Отправлено:</span>
+							<span class="stats-value">${formattedStats.totalSent}</span>
+						</div>
+						<div class="stats-item">
+							<span class="stats-label">Обработано:</span>
+							<span class="stats-value">${formattedStats.totalProcessed}</span>
+						</div>
+						<div class="stats-item">
+							<span class="stats-label">Пропущено:</span>
+							<span class="stats-value">${formattedStats.totalSkipped}</span>
+						</div>
+						<div class="stats-item">
+							<span class="stats-label">Ошибки:</span>
+							<span class="stats-value">${formattedStats.totalErrors}</span>
+						</div>
+						<div class="stats-item">
+							<span class="stats-label">Всего отправлено:</span>
+							<span class="stats-value">${Utils.formatNumber(formattedStats.allTimeSent)}</span>
+						</div>
+						<div class="stats-item">
+							<span class="stats-label">Успешность:</span>
+							<span class="stats-value">${formattedStats.successRate}%</span>
+						</div>
+						<div class="stats-item" style="grid-column: 1 / -1;">
+							<span class="stats-label">Время работы:</span>
+							<span class="stats-value">${formattedStats.runningTime}</span>
+						</div>
+						<div class="stats-item" style="grid-column: 1 / -1;">
+							<span class="stats-label">Сегодня отправлено:</span>
+							<span class="stats-value">${Responses.getSentToday()}</span>
+						</div>
+					`;
+				}
+			} catch (error) {
+				console.error('Ошибка обновления статистики:', error);
 			}
 		},
 
@@ -989,6 +1187,34 @@
 			}
 		},
 
+		toggleUI: () => {
+			const uiContainer = document.getElementById('hh-api-ui-container');
+			if (uiContainer) {
+				STATE.uiCollapsed = !STATE.uiCollapsed;
+				uiContainer.style.display = STATE.uiCollapsed ? 'none' : 'flex';
+			}
+		},
+
+		toggleUIVisibility: () => {
+			const uiContainer = document.getElementById('hh-api-ui-container');
+			if (uiContainer) {
+				STATE.uiCollapsed = !STATE.uiCollapsed;
+				uiContainer.style.display = STATE.uiCollapsed ? 'none' : 'flex';
+			}
+		},
+
+		toggleFloatingUI: () => {
+			const uiContainer = document.getElementById('hh-api-ui-container');
+			const floatingBtn = document.getElementById('hh-floating-button');
+			if (uiContainer && floatingBtn) {
+				STATE.uiCollapsed = !STATE.uiCollapsed;
+				uiContainer.style.display = STATE.uiCollapsed ? 'none' : 'flex';
+
+				// Обновляем текст плавающей кнопки
+				UIBuilder.updateFloatingButtonText();
+			}
+		},
+
 		createSettingsPanel: () => {
 			let panel = document.getElementById('hh-settings-panel');
 			if (panel) {
@@ -1044,6 +1270,10 @@
 								<label style="display: flex; align-items: center; gap: 12px; cursor: pointer;">
 									<input type="checkbox" id="setting-smart-delay" ${STATE.settings.smartDelay ? 'checked' : ''}>
 									<span>Умная задержка (адаптивная)</span>
+								</label>
+								<label style="display: flex; align-items: center; gap: 12px; cursor: pointer;">
+									<input type="checkbox" id="setting-hide-ui" ${STATE.settings.hideUIOnLoad ? 'checked' : ''}>
+									<span>Скрывать интерфейс при загрузке</span>
 								</label>
 							</div>
 						</div>
@@ -1141,6 +1371,10 @@
 				STATE.settings.smartDelay = panel.querySelector('#setting-smart-delay').checked;
 				Utils.saveConfig();
 			};
+			panel.querySelector('#setting-hide-ui').onchange = () => {
+				STATE.settings.hideUIOnLoad = panel.querySelector('#setting-hide-ui').checked;
+				Utils.saveConfig();
+			};
 			panel.querySelector('#setting-filters').onchange = () => {
 				STATE.settings.enableFilters = panel.querySelector('#setting-filters').checked;
 				Utils.saveConfig();
@@ -1221,6 +1455,7 @@
 			STATE.settings.autoSaveConfig = panel.querySelector('#setting-autosave').checked;
 			STATE.settings.smartDelay = panel.querySelector('#setting-smart-delay').checked;
 			STATE.settings.enableFilters = panel.querySelector('#setting-filters').checked;
+			STATE.settings.hideUIOnLoad = panel.querySelector('#setting-hide-ui').checked;
 
 			CONFIG.MIN_SALARY = parseInt(panel.querySelector('#setting-min-salary').value) || 0;
 			CONFIG.MAX_SALARY = parseInt(panel.querySelector('#setting-max-salary').value) || 0;
@@ -1271,6 +1506,7 @@
 				smartDelay: true,
 				skipDuplicates: true,
 				detailedLogging: true,
+				hideUIOnLoad: true,
 			});
 
 			Object.assign(CONFIG, {
@@ -1301,15 +1537,23 @@
 
 	// ===== ПРОВЕРКА ВАКАНСИИ =====
 	async function checkVacancyStatus(vacancyId) {
+		const controller = new AbortController();
+		const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 секунд таймаут
+
 		try {
 			const res = await fetch(CONFIG.PUBLIC_VACANCY_API + vacancyId, {
 				headers: {
 					'User-Agent': navigator.userAgent,
 				},
+				signal: controller.signal,
 			});
 
+			clearTimeout(timeoutId);
+
 			if (!res.ok) {
-				return { error: true, message: `HTTP ${res.status}` };
+				const errorMsg = `HTTP ${res.status} ${res.statusText}`;
+				console.error(`❌ Сетевая ошибка при проверке вакансии ${vacancyId}: ${errorMsg}`);
+				return { error: true, message: errorMsg };
 			}
 
 			const data = await res.json();
@@ -1331,8 +1575,19 @@
 
 			return { error: false, data };
 		} catch (err) {
-			console.error('Ошибка проверки вакансии:', err);
-			return { error: true, message: 'Сетевая ошибка' };
+			clearTimeout(timeoutId);
+
+			// Обработка сетевых ошибок с таймаутами: детальная классификация ошибок
+			// Разные типы ошибок требуют разных подходов к повторным попыткам
+			let errorMsg = 'Неизвестная сетевая ошибка';
+			if (err.name === 'AbortError') {
+				errorMsg = 'Таймаут запроса (10 сек)';
+			} else if (err.message) {
+				errorMsg = err.message;
+			}
+
+			console.error(`❌ Ошибка проверки вакансии ${vacancyId}: ${errorMsg}`, err);
+			return { error: true, message: errorMsg };
 		}
 	}
 
@@ -1397,6 +1652,9 @@
 			const coverLetter = CONFIG.COVER_LETTER_TEMPLATE.replace('{#vacancyName}', title);
 			form.append('letter', coverLetter);
 
+			const controller = new AbortController();
+			const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 секунд таймаут
+
 			const res = await fetch(CONFIG.VACANCY_API_URL, {
 				method: 'POST',
 				credentials: 'include',
@@ -1406,7 +1664,10 @@
 					'User-Agent': navigator.userAgent,
 				},
 				body: form,
+				signal: controller.signal,
 			});
+
+			clearTimeout(timeoutId);
 
 			if (!res.ok) {
 				let errorData;
@@ -1452,6 +1713,8 @@
 					STATE.totalSkipped++;
 					return;
 				} else if (retryCount < CONFIG.MAX_RETRIES) {
+					// Логика повторных попыток: при сетевых ошибках делаем повторные попытки с фиксированной задержкой
+					// Это fallback-механизм для временных проблем с сетью или сервером
 					console.log(
 						`Повторная попытка ${retryCount + 1}/${CONFIG.MAX_RETRIES} для вакансии ${vacancyId}`
 					);
@@ -1466,15 +1729,14 @@
 						message: errorData.error || 'Неизвестная ошибка',
 					});
 					STATE.totalErrors++;
+					STATE.consecutiveFailures++;
 
-					if (STATE.settings.pauseOnError) {
-						pauseProcess();
-						UI.showNotification('Пауза', 'Процесс приостановлен из-за ошибки', 'warning');
-					}
+					// Не паузим процесс, продолжаем с экспоненциальной задержкой
 					return;
 				}
 			} else {
 				STATE.responsesCount++;
+				STATE.consecutiveFailures = 0; // Сбрасываем счетчик при успехе
 				Responses.markAsResponded(vacancyId);
 				Logger.saveLog({
 					id: vacancyId,
@@ -1484,7 +1746,15 @@
 				});
 			}
 		} catch (err) {
-			console.error('❌ Ошибка запроса:', err);
+			let errorMsg = 'Неизвестная сетевая ошибка';
+			if (err.name === 'AbortError') {
+				errorMsg = 'Таймаут запроса (10 сек)';
+			} else if (err.message) {
+				errorMsg = err.message;
+			}
+
+			console.error(`❌ Ошибка отправки отклика на вакансию ${vacancyId}: ${errorMsg}`, err);
+
 			if (retryCount < CONFIG.MAX_RETRIES) {
 				console.log(
 					`Повторная попытка ${retryCount + 1}/${CONFIG.MAX_RETRIES} для вакансии ${vacancyId}`
@@ -1497,14 +1767,12 @@
 					title,
 					time: new Date().toISOString(),
 					success: false,
-					message: 'Сетевая ошибка',
+					message: errorMsg,
 				});
 				STATE.totalErrors++;
+				STATE.consecutiveFailures++;
 
-				if (STATE.settings.pauseOnError) {
-					pauseProcess();
-					UI.showNotification('Пауза', 'Процесс приостановлен из-за сетевой ошибки', 'warning');
-				}
+				// Не паузим процесс, продолжаем с экспоненциальной задержкой
 			}
 		}
 	}
@@ -1516,16 +1784,23 @@
 
 		console.log(`📄 Обрабатываю страницу ${pageNum + 1}: ${pageUrl}`);
 
+		const controller = new AbortController();
+		const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 секунд таймаут
+
 		try {
 			const res = await fetch(pageUrl, {
 				credentials: 'include',
 				headers: {
 					'User-Agent': navigator.userAgent,
 				},
+				signal: controller.signal,
 			});
 
+			clearTimeout(timeoutId);
+
 			if (!res.ok) {
-				console.error(`Ошибка загрузки страницы ${pageNum + 1}: ${res.status}`);
+				const errorMsg = `HTTP ${res.status} ${res.statusText}`;
+				console.error(`❌ Ошибка загрузки страницы ${pageNum + 1}: ${errorMsg}`);
 				return false;
 			}
 
@@ -1533,7 +1808,8 @@
 			const parser = new DOMParser();
 			const doc = parser.parseFromString(text, 'text/html');
 
-			// Улучшенный поиск вакансий
+			// Fallback-механизмы поиска вакансий: множественные стратегии поиска элементов
+			// HH.ru часто меняет CSS-классы, поэтому используем каскадный поиск с запасными вариантами
 			let cards = doc.querySelectorAll('[data-qa="vacancy-serp__vacancy"]');
 			if (cards.length === 0) {
 				cards = doc.querySelectorAll('.vacancy-serp-item');
@@ -1617,10 +1893,22 @@
 					console.log(`❌ Отклик не отправлен на вакансию ${vacancyData.id}`);
 				}
 
-				// Умная задержка между вакансиями
+				// Умная задержка между вакансиями с учетом consecutiveFailures
 				if (i < cards.length - 1) {
 					// Не делаем задержку после последней вакансии
-					const delay = Utils.getSmartDelay();
+					let delay = Utils.getSmartDelay();
+
+					// Логика экспоненциальной задержки: при последовательных неудачах увеличиваем задержку
+					// Это предотвращает перегрузку сервера и дает время на восстановление
+					// Формула: 2^(failures-1) * 1000мс = 1с, 2с, 4с, 8с, 16с... при 1,2,3,4... неудачах
+					if (STATE.consecutiveFailures > 0) {
+						const exponentialDelay = Math.pow(2, STATE.consecutiveFailures - 1) * 1000; // 1с, 2с, 4с, 8с...
+						delay = Math.max(delay, exponentialDelay);
+						console.log(
+							`⚠️ Экспоненциальная задержка ${exponentialDelay}мс из-за ${STATE.consecutiveFailures} подряд неудач`
+						);
+					}
+
 					console.log(`⏳ Задержка ${delay}мс перед следующей вакансией...`);
 					await Utils.randomDelay(delay * 0.8, delay * 1.2);
 				}
@@ -1635,7 +1923,18 @@
 			// Возвращаем true только если обработали хотя бы одну вакансию
 			return processedOnPage > 0;
 		} catch (err) {
-			console.error(`❌ Ошибка обработки страницы ${pageNum + 1}:`, err);
+			clearTimeout(timeoutId);
+
+			// Обработка сетевых ошибок с таймаутами: детальная классификация ошибок
+			// Разные типы ошибок требуют разных подходов к повторным попыткам
+			let errorMsg = 'Неизвестная сетевая ошибка';
+			if (err.name === 'AbortError') {
+				errorMsg = 'Таймаут запроса (10 сек)';
+			} else if (err.message) {
+				errorMsg = err.message;
+			}
+
+			console.error(`❌ Ошибка обработки страницы ${pageNum + 1}: ${errorMsg}`, err);
 			STATE.totalErrors++;
 			return false;
 		}
@@ -1783,7 +2082,12 @@
 
 		const btn = document.getElementById('hh-api-button');
 		if (btn) {
-			btn.textContent = '📤 Отправить отклики';
+			const pageType = Utils.detectPageType();
+			if (pageType === 'vacancy') {
+				btn.textContent = '📤 Откликнуться';
+			} else {
+				btn.textContent = '📤 Отправить отклики';
+			}
 			btn.style.background = 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)';
 		}
 
@@ -1849,6 +2153,25 @@
 			return;
 		}
 
+		// Определяем тип страницы
+		const pageType = Utils.detectPageType();
+
+		// Для главной страницы - не обрабатываем вакансии
+		if (pageType === 'home') {
+			UI.showNotification(
+				'Главная страница',
+				'На главной странице HH.ru нет вакансий для обработки',
+				'info'
+			);
+			return;
+		}
+
+		// Для страницы вакансии - одиночный отклик
+		if (pageType === 'vacancy') {
+			startSingleVacancyProcess();
+			return;
+		}
+
 		// Проверяем дневной лимит
 		const sentToday = Responses.getSentToday();
 		if (sentToday >= CONFIG.MAX_RESPONSES_PER_DAY) {
@@ -1875,6 +2198,7 @@
 		STATE.startTime = Date.now();
 		STATE.totalPauseTime = 0;
 		STATE.currentVacancy = null;
+		STATE.consecutiveFailures = 0;
 
 		// Обновляем UI
 		const btn = document.getElementById('hh-api-button');
@@ -1897,6 +2221,96 @@
 		processAllPages(url);
 	}
 
+	// Обработка одиночной вакансии
+	async function startSingleVacancyProcess() {
+		console.log('🔍 Начинаю обработку одиночной вакансии...');
+
+		// Получаем данные вакансии
+		const vacancyData = Utils.getCurrentVacancyData();
+		if (!vacancyData) {
+			UI.showNotification('Ошибка', 'Не удалось определить вакансию на странице', 'error');
+			return;
+		}
+
+		// Проверяем наличие кнопки отклика
+		if (!Utils.hasRespondButton()) {
+			UI.showNotification(
+				'Внимание',
+				'На странице нет кнопки отклика. Возможно, вакансия уже закрыта или отклик уже отправлен.',
+				'warning'
+			);
+			return;
+		}
+
+		// Проверяем, закрыта ли вакансия
+		if (Utils.isVacancyClosed()) {
+			UI.showNotification('Вакансия закрыта', 'Отклики на эту вакансию невозможны', 'warning');
+			return;
+		}
+
+		console.log(`📋 Обрабатываю вакансию: ${vacancyData.title} (ID: ${vacancyData.id})`);
+
+		// Проверяем дневной лимит
+		const sentToday = Responses.getSentToday();
+		if (sentToday >= CONFIG.MAX_RESPONSES_PER_DAY) {
+			UI.showNotification(
+				'Лимит превышен',
+				`Сегодня уже отправлено ${sentToday} откликов. Дневной лимит: ${CONFIG.MAX_RESPONSES_PER_DAY}`,
+				'warning',
+				6000
+			);
+			return;
+		}
+
+		// Сброс состояния для одиночного отклика
+		STATE.responsesCount = 0;
+		STATE.totalProcessed = 0;
+		STATE.totalSkipped = 0;
+		STATE.totalErrors = 0;
+		STATE.isRunning = true;
+		STATE.isPaused = false;
+		STATE.startTime = Date.now();
+		STATE.totalPauseTime = 0;
+		STATE.currentVacancy = vacancyData.title;
+		STATE.consecutiveFailures = 0;
+
+		// Обновляем UI
+		const btn = document.getElementById('hh-api-button');
+		if (btn) {
+			btn.textContent = '⏹️ Остановить';
+			btn.style.background = 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)';
+		}
+
+		// Показываем прогресс
+		ProgressTracker.create();
+		UI.openModal();
+
+		UI.showNotification('Запущено', `Отправляю отклик на: ${vacancyData.title}`, 'success');
+
+		// Обрабатываем вакансию
+		STATE.totalProcessed++;
+
+		// Применяем фильтры
+		const filterResult = Filters.shouldSkipVacancy(vacancyData);
+		if (filterResult.skip) {
+			console.log(`⏭️ Пропускаю вакансию: ${filterResult.reasons.join(', ')}`);
+			Logger.saveLog({
+				id: vacancyData.id,
+				title: vacancyData.title,
+				time: new Date().toISOString(),
+				success: false,
+				message: filterResult.reasons.join(', '),
+			});
+			STATE.totalSkipped++;
+			stopProcess();
+			return;
+		}
+
+		// Отправляем отклик
+		await respondToVacancy(vacancyData.id, vacancyData.title);
+		stopProcess();
+	}
+
 	// ===== СОЗДАНИЕ UI =====
 	const UIBuilder = {
 		createMainInterface: () => {
@@ -1910,7 +2324,7 @@
 			uiContainer.id = 'hh-api-ui-container';
 			uiContainer.style.cssText = `
 				position: fixed;
-				bottom: 20px;
+				bottom: 100px;
 				right: 20px;
 				z-index: 9999;
 				display: flex;
@@ -1931,13 +2345,51 @@
 			uiContainer.appendChild(pauseButton);
 			uiContainer.appendChild(controlButtons);
 			container.appendChild(uiContainer);
+
+			// Создаем плавающую кнопку
+			UIBuilder.createFloatingButton();
+
+			// Применяем настройку скрытия интерфейса при загрузке
+			if (STATE.settings.hideUIOnLoad) {
+				uiContainer.style.display = 'none';
+				STATE.uiCollapsed = true;
+			} else {
+				STATE.uiCollapsed = false;
+			}
+
+			// Добавляем индикатор типа страницы
+			UIBuilder.createPageTypeIndicator(uiContainer);
+
+			// Обновляем текст плавающей кнопки после инициализации
+			UIBuilder.updateFloatingButtonText();
 		},
 
 		createUrlInput: () => {
+			const pageType = Utils.detectPageType();
+			let placeholder = 'Вставьте ссылку с HH.ru или оставьте пустым для общего поиска';
+			let isDisabled = false;
+
+			if (pageType === 'vacancy') {
+				const vacancyData = Utils.getCurrentVacancyData();
+				if (vacancyData) {
+					placeholder = `Текущая вакансия: ${vacancyData.title}`;
+					isDisabled = true;
+				} else {
+					placeholder = 'Не удалось определить вакансию на странице';
+					isDisabled = true;
+				}
+			} else if (pageType === 'search') {
+				placeholder = 'Оставьте пустым для обработки текущего поиска или вставьте другую ссылку';
+			} else if (pageType === 'employer') {
+				placeholder =
+					'Оставьте пустым для обработки вакансий работодателя или вставьте другую ссылку';
+			}
+
 			const input = document.createElement('input');
 			input.type = 'text';
 			input.id = 'hh-api-filter-url';
-			input.placeholder = 'Вставьте ссылку с HH.ru или оставьте пустым для общего поиска';
+			input.placeholder = placeholder;
+			input.disabled = isDisabled;
 			input.style.cssText = `
 				width: 100%;
 				padding: 16px 20px;
@@ -1945,36 +2397,47 @@
 				border: 2px solid #e5e7eb;
 				font-family: inherit;
 				font-size: 14px;
-				background: #fff;
+				background: ${isDisabled ? '#f9fafb' : '#fff'};
 				box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
 				transition: all 0.3s ease;
 				outline: none;
 				box-sizing: border-box;
+				cursor: ${isDisabled ? 'not-allowed' : 'text'};
 			`;
 
 			input.onfocus = () => {
-				input.style.borderColor = '#3b82f6';
-				input.style.boxShadow = '0 0 0 4px rgba(59, 130, 246, 0.1)';
+				if (!isDisabled) {
+					input.style.borderColor = '#3b82f6';
+					input.style.boxShadow = '0 0 0 4px rgba(59, 130, 246, 0.1)';
+				}
 			};
 
 			input.onblur = () => {
-				const storedUrl = localStorage.getItem(CONFIG.FILTER_URL_KEY);
-				input.style.borderColor = input.value === storedUrl ? '#10b981' : '#e5e7eb';
-				input.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.05)';
+				if (!isDisabled) {
+					const storedUrl = localStorage.getItem(CONFIG.FILTER_URL_KEY);
+					input.style.borderColor = input.value === storedUrl ? '#10b981' : '#e5e7eb';
+					input.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.05)';
+				}
 			};
 
-			// Автосохранение с debounce
-			const saveUrl = Utils.debounce(() => {
-				localStorage.setItem(CONFIG.FILTER_URL_KEY, input.value);
-				input.style.borderColor = '#10b981';
-			}, 500);
+			// Автосохранение с debounce (только если не disabled)
+			if (!isDisabled) {
+				const saveUrl = Utils.debounce(() => {
+					localStorage.setItem(CONFIG.FILTER_URL_KEY, input.value);
+					input.style.borderColor = '#10b981';
+				}, 500);
 
-			input.oninput = saveUrl;
+				input.oninput = saveUrl;
 
-			// Загружаем сохраненный URL
-			const storedUrl = localStorage.getItem(CONFIG.FILTER_URL_KEY);
-			if (storedUrl) {
-				input.value = storedUrl;
+				// Загружаем сохраненный URL
+				const storedUrl = localStorage.getItem(CONFIG.FILTER_URL_KEY);
+				if (storedUrl) {
+					input.value = storedUrl;
+					input.style.borderColor = '#10b981';
+				}
+			} else {
+				// Для disabled поля показываем текущий URL
+				input.value = window.location.href;
 				input.style.borderColor = '#10b981';
 			}
 
@@ -1982,9 +2445,34 @@
 		},
 
 		createMainButton: () => {
+			const pageType = Utils.detectPageType();
+			let buttonText = '📤 Отправить отклики';
+			let buttonHint = 'Оставьте поле пустым для общего поиска или вставьте ссылку с HH.ru';
+
+			if (pageType === 'vacancy') {
+				const vacancyData = Utils.getCurrentVacancyData();
+				if (vacancyData) {
+					buttonText = '📤 Откликнуться';
+					buttonHint = `Откликнуться на: ${vacancyData.title}`;
+				} else {
+					buttonText = '📤 Отправить отклики';
+					buttonHint = 'Не удалось определить вакансию на странице';
+				}
+			} else if (pageType === 'search') {
+				buttonText = '📤 Отправить отклики';
+				buttonHint = 'Обработать вакансии из текущего поиска';
+			} else if (pageType === 'employer') {
+				buttonText = '📤 Отправить отклики';
+				buttonHint = 'Обработать вакансии этого работодателя';
+			} else {
+				buttonText = '📤 Отправить отклики';
+				buttonHint = 'Оставьте поле пустым для общего поиска или вставьте ссылку с HH.ru';
+			}
+
 			const btn = document.createElement('button');
 			btn.id = 'hh-api-button';
-			btn.textContent = '📤 Отправить отклики';
+			btn.textContent = buttonText;
+			btn.title = buttonHint;
 			btn.style.cssText = `
 				width: 100%;
 				padding: 18px;
@@ -2020,11 +2508,21 @@
 					return;
 				}
 
+				// Для страницы вакансии не проверяем URL
+				if (pageType === 'vacancy') {
+					startProcess(window.location.href);
+					return;
+				}
+
 				let url = document.getElementById('hh-api-filter-url').value.trim();
 
-				// Если URL пустой, используем базовый поиск
+				// Если URL пустой, используем текущий URL или базовый поиск
 				if (!url) {
-					url = 'https://hh.ru/search/vacancy';
+					if (pageType === 'search' || pageType === 'employer') {
+						url = window.location.href;
+					} else {
+						url = 'https://hh.ru/search/vacancy';
+					}
 				}
 
 				if (!Utils.validateUrl(url)) {
@@ -2130,6 +2628,139 @@
 			btn.onclick = onClick;
 			return btn;
 		},
+
+		createPageTypeIndicator: (container) => {
+			const pageType = Utils.detectPageType();
+			let indicatorText = '';
+			let indicatorColor = '#6b7280';
+			let indicatorIcon = '📄';
+
+			switch (pageType) {
+				case 'home':
+					indicatorText = 'Главная страница HH.ru';
+					indicatorIcon = '🏠';
+					indicatorColor = '#6b7280';
+					break;
+				case 'vacancy':
+					const vacancyData = Utils.getCurrentVacancyData();
+					if (vacancyData) {
+						indicatorText = `Вакансия: ${vacancyData.title}`;
+						indicatorIcon = '🎯';
+						indicatorColor =
+							Utils.hasRespondButton() && !Utils.isVacancyClosed() ? '#10b981' : '#f59e0b';
+					} else {
+						indicatorText = 'Не удалось определить вакансию';
+						indicatorIcon = '⚠️';
+						indicatorColor = '#ef4444';
+					}
+					break;
+				case 'search':
+					indicatorText = 'Страница поиска вакансий';
+					indicatorIcon = '🔍';
+					indicatorColor = '#3b82f6';
+					break;
+				case 'employer':
+					indicatorText = 'Страница работодателя';
+					indicatorIcon = '🏢';
+					indicatorColor = '#8b5cf6';
+					break;
+				case 'resume':
+					indicatorText = 'Страница резюме';
+					indicatorIcon = '📄';
+					indicatorColor = '#6b7280';
+					break;
+				default:
+					indicatorText = 'Другая страница HH.ru';
+					indicatorIcon = '📄';
+					indicatorColor = '#6b7280';
+			}
+
+			const indicator = document.createElement('div');
+			indicator.id = 'hh-page-type-indicator';
+			indicator.style.cssText = `
+				padding: 8px 12px;
+				background: ${indicatorColor}15;
+				border: 1px solid ${indicatorColor}30;
+				border-radius: 8px;
+				font-size: 12px;
+				color: ${indicatorColor};
+				font-weight: 500;
+				text-align: center;
+				margin-bottom: 8px;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				gap: 6px;
+			`;
+			indicator.innerHTML = `${indicatorIcon} ${indicatorText}`;
+
+			// Вставляем перед полем ввода
+			const input = container.querySelector('#hh-api-filter-url');
+			if (input) {
+				container.insertBefore(indicator, input);
+			} else {
+				container.appendChild(indicator);
+			}
+
+			return indicator;
+		},
+
+		createFloatingButton: () => {
+			// Удаляем существующую плавающую кнопку
+			const existing = document.getElementById('hh-floating-button');
+			if (existing) existing.remove();
+
+			const floatingBtn = document.createElement('button');
+			floatingBtn.id = 'hh-floating-button';
+			floatingBtn.textContent = STATE.uiCollapsed ? 'HH' : '×';
+			floatingBtn.title = STATE.uiCollapsed ? 'Показать интерфейс' : 'Скрыть интерфейс';
+			floatingBtn.style.cssText = `
+				position: fixed;
+				bottom: 20px;
+				right: 20px;
+				width: 60px;
+				height: 60px;
+				border-radius: 50%;
+				background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+				color: white;
+				border: none;
+				font-size: 18px;
+				font-weight: 700;
+				cursor: pointer;
+				z-index: 10000;
+				box-shadow: 0 8px 32px rgba(59, 130, 246, 0.4);
+				transition: all 0.3s ease;
+				font-family: system-ui, -apple-system, sans-serif;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+			`;
+
+			floatingBtn.onmouseover = () => {
+				floatingBtn.style.transform = 'scale(1.1)';
+				floatingBtn.style.boxShadow = '0 12px 40px rgba(59, 130, 246, 0.6)';
+			};
+
+			floatingBtn.onmouseout = () => {
+				floatingBtn.style.transform = 'scale(1)';
+				floatingBtn.style.boxShadow = '0 8px 32px rgba(59, 130, 246, 0.4)';
+			};
+
+			floatingBtn.onclick = () => {
+				UI.toggleFloatingUI();
+			};
+
+			document.body.appendChild(floatingBtn);
+			return floatingBtn;
+		},
+
+		updateFloatingButtonText: () => {
+			const floatingBtn = document.getElementById('hh-floating-button');
+			if (floatingBtn) {
+				floatingBtn.textContent = STATE.uiCollapsed ? 'HH' : '×';
+				floatingBtn.title = STATE.uiCollapsed ? 'Показать интерфейс' : 'Скрыть интерфейс';
+			}
+		},
 	};
 
 	// ===== ИНИЦИАЛИЗАЦИЯ =====
@@ -2152,6 +2783,31 @@
 
 		// Создаем интерфейс
 		UIBuilder.createMainInterface();
+
+		// Показываем информацию о текущей странице
+		const pageType = Utils.detectPageType();
+		console.log(`📄 Тип страницы: ${pageType}`);
+
+		if (pageType === 'vacancy') {
+			const vacancyData = Utils.getCurrentVacancyData();
+			if (vacancyData) {
+				console.log(`🎯 Текущая вакансия: ${vacancyData.title} (ID: ${vacancyData.id})`);
+				if (!Utils.hasRespondButton()) {
+					console.warn('⚠️ На странице нет кнопки отклика');
+				}
+				if (Utils.isVacancyClosed()) {
+					console.warn('⚠️ Вакансия закрыта');
+				}
+			} else {
+				console.warn('⚠️ Не удалось определить вакансию на странице');
+			}
+		} else if (pageType === 'home') {
+			console.log('🏠 Главная страница HH.ru');
+		} else if (pageType === 'search') {
+			console.log('🔍 Страница поиска вакансий');
+		} else if (pageType === 'employer') {
+			console.log('🏢 Страница работодателя');
+		}
 
 		// Показываем статистику при загрузке
 		const stats = Utils.getFormattedStats();
@@ -2177,6 +2833,9 @@
 
 	// Функция для автоматического поиска RESUME_HASH
 	async function autoFindResumeHash() {
+		const controller = new AbortController();
+		const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 секунд таймаут
+
 		try {
 			console.log('🔍 Пытаюсь автоматически найти RESUME_HASH...');
 
@@ -2186,7 +2845,10 @@
 					Accept: 'application/json',
 					'User-Agent': navigator.userAgent,
 				},
+				signal: controller.signal,
 			});
+
+			clearTimeout(timeoutId);
 
 			if (response.ok) {
 				const data = await response.json();
@@ -2210,7 +2872,18 @@
 				6000
 			);
 		} catch (error) {
-			console.log('❌ Ошибка при автоматическом поиске RESUME_HASH:', error);
+			clearTimeout(timeoutId);
+
+			// Обработка сетевых ошибок с таймаутами: fallback при автоматическом поиске резюме
+			// Если не удается автоматически найти RESUME_HASH, пользователь должен указать его вручную
+			let errorMsg = 'Неизвестная сетевая ошибка';
+			if (error.name === 'AbortError') {
+				errorMsg = 'Таймаут запроса (10 сек)';
+			} else if (error.message) {
+				errorMsg = error.message;
+			}
+
+			console.log(`❌ Ошибка при автоматическом поиске RESUME_HASH: ${errorMsg}`, error);
 		}
 	}
 
