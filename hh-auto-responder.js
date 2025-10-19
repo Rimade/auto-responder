@@ -1340,6 +1340,17 @@
 							}</textarea>
 						</div>
 
+						<!-- Хеш резюме -->
+						<div>
+							<h3 style="margin: 0 0 16px 0; font-size: 18px; font-weight: 600; color: #374151;">Хеш резюме</h3>
+							<div>
+								<label style="display: block; margin-bottom: 4px; font-weight: 500;">Хеш резюме:</label>
+								<input type="text" id="setting-resume-hash" value="${
+									CONFIG.RESUME_HASH
+								}" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px;" placeholder="Введите хеш вашего резюме">
+							</div>
+						</div>
+
 						<!-- Кнопки -->
 						<div style="display: flex; gap: 12px; justify-content: flex-end; margin-top: 16px;">
 							<button id="settings-reset" style="padding: 12px 24px; background: #6b7280; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500;">Сбросить</button>
@@ -1429,6 +1440,11 @@
 				Utils.saveConfig();
 			};
 
+			panel.querySelector('#setting-resume-hash').onchange = () => {
+				CONFIG.RESUME_HASH = panel.querySelector('#setting-resume-hash').value;
+				Utils.saveConfig();
+			};
+
 			panel.querySelector('#settings-save').onclick = () => {
 				UI.saveSettings();
 				UI.showNotification('Сохранено', 'Настройки успешно сохранены', 'success');
@@ -1486,6 +1502,7 @@
 				: [];
 
 			CONFIG.COVER_LETTER_TEMPLATE = panel.querySelector('#setting-cover-letter').value;
+			CONFIG.RESUME_HASH = panel.querySelector('#setting-resume-hash').value;
 
 			Utils.saveConfig();
 
@@ -1510,6 +1527,7 @@
 			});
 
 			Object.assign(CONFIG, {
+				RESUME_HASH: '',
 				MIN_SALARY: 0,
 				MAX_SALARY: 0,
 				SKIP_WITHOUT_SALARY: false,
@@ -2702,6 +2720,29 @@
 				container.appendChild(indicator);
 			}
 
+			// Добавляем информацию о RESUME_HASH
+			const resumeInfo = document.createElement('div');
+			resumeInfo.style.cssText = `
+				padding: 6px 12px;
+				background: ${CONFIG.RESUME_HASH ? '#10b98115' : '#ef444415'};
+				border: 1px solid ${CONFIG.RESUME_HASH ? '#10b98130' : '#ef444430'};
+				border-radius: 8px;
+				font-size: 11px;
+				color: ${CONFIG.RESUME_HASH ? '#059669' : '#dc2626'};
+				font-weight: 500;
+				text-align: center;
+				margin-top: 4px;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				gap: 6px;
+			`;
+			resumeInfo.innerHTML = `${CONFIG.RESUME_HASH ? '✅' : '⚠️'} RESUME_HASH: ${
+				CONFIG.RESUME_HASH ? 'установлен' : 'не установлен'
+			}`;
+
+			container.insertBefore(resumeInfo, indicator.nextSibling);
+
 			return indicator;
 		},
 
@@ -2807,6 +2848,13 @@
 			console.log('🔍 Страница поиска вакансий');
 		} else if (pageType === 'employer') {
 			console.log('🏢 Страница работодателя');
+		}
+
+		// Показываем текущий RESUME_HASH
+		if (CONFIG.RESUME_HASH) {
+			console.log(`💼 Текущий RESUME_HASH: ${CONFIG.RESUME_HASH.substring(0, 8)}...`);
+		} else {
+			console.warn('⚠️ RESUME_HASH не установлен');
 		}
 
 		// Показываем статистику при загрузке
