@@ -54,6 +54,7 @@
 		progressVisible: true,
 		currentVacancy: null,
 		consecutiveFailures: 0,
+		consecutiveAlreadyApplied: 0,
 		settings: {
 			autoFindResume: true,
 			showNotifications: true,
@@ -203,8 +204,7 @@
 			return selectors.some((selector) => document.querySelector(selector));
 		},
 
-		// Проверки элементов страницы: комплексная проверка закрытия вакансии
-		// Использует множественные подходы: проверка CSS-селекторов и анализ текста
+		// Проверки элементов страницы: проверка закрытия вакансии через CSS-селекторы
 		// Fallback-механизм для случаев, когда HH.ru меняет структуру разметки
 		isVacancyClosed: () => {
 			const closedSelectors = [
@@ -214,33 +214,8 @@
 				'.vacancy-status_closed',
 			];
 
-			const closedTextSelectors = [
-				'.bloko-text',
-				'.vacancy-description',
-				'[data-qa="vacancy-description"]',
-			];
-
 			// Проверяем наличие элементов "закрыто"
-			if (closedSelectors.some((selector) => document.querySelector(selector))) {
-				return true;
-			}
-
-			// Проверяем текст на наличие слов о закрытии
-			for (const selector of closedTextSelectors) {
-				const element = document.querySelector(selector);
-				if (element) {
-					const text = element.textContent.toLowerCase();
-					if (
-						text.includes('вакансия закрыта') ||
-						text.includes('отклики закрыты') ||
-						text.includes('не актуальна')
-					) {
-						return true;
-					}
-				}
-			}
-
-			return false;
+			return closedSelectors.some((selector) => document.querySelector(selector));
 		},
 
 		getXsrfToken: () => {
@@ -1278,6 +1253,22 @@
 							</div>
 						</div>
 
+						<!-- Хеш резюме -->
+						<div>
+							<h3 style="margin: 0 0 16px 0; font-size: 18px; font-weight: 600; color: #374151;">Хеш резюме</h3>
+							<input type="text" id="setting-resume-hash" value="${
+								CONFIG.RESUME_HASH
+							}" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px;" placeholder="Введите хеш вашего резюме">
+						</div>
+
+						<!-- Сопроводительное письмо -->
+						<div>
+							<h3 style="margin: 0 0 16px 0; font-size: 18px; font-weight: 600; color: #374151;">Сопроводительное письмо</h3>
+							<textarea id="setting-cover-letter" style="width: 100%; height: 120px; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; resize: vertical;" placeholder="Используйте {#vacancyName} для подстановки названия вакансии">${
+								CONFIG.COVER_LETTER_TEMPLATE
+							}</textarea>
+						</div>
+
 						<!-- Фильтры -->
 						<div>
 							<h3 style="margin: 0 0 16px 0; font-size: 18px; font-weight: 600; color: #374151;">Фильтры</h3>
@@ -1329,25 +1320,6 @@
 										', '
 									)}" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px;" placeholder="Компания1, Компания2">
 								</div>
-							</div>
-						</div>
-
-						<!-- Сопроводительное письмо -->
-						<div>
-							<h3 style="margin: 0 0 16px 0; font-size: 18px; font-weight: 600; color: #374151;">Сопроводительное письмо</h3>
-							<textarea id="setting-cover-letter" style="width: 100%; height: 120px; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; resize: vertical;" placeholder="Используйте {#vacancyName} для подстановки названия вакансии">${
-								CONFIG.COVER_LETTER_TEMPLATE
-							}</textarea>
-						</div>
-
-						<!-- Хеш резюме -->
-						<div>
-							<h3 style="margin: 0 0 16px 0; font-size: 18px; font-weight: 600; color: #374151;">Хеш резюме</h3>
-							<div>
-								<label style="display: block; margin-bottom: 4px; font-weight: 500;">Хеш резюме:</label>
-								<input type="text" id="setting-resume-hash" value="${
-									CONFIG.RESUME_HASH
-								}" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px;" placeholder="Введите хеш вашего резюме">
 							</div>
 						</div>
 
@@ -1551,6 +1523,17 @@
 			STATE.settingsVisible = true;
 			UI.createSettingsPanel();
 		},
+
+		switchSettings: () => {
+			const panel = document.getElementById('hh-settings-panel');
+			if (panel) {
+				STATE.settingsVisible = !STATE.settingsVisible;
+				panel.style.display = STATE.settingsVisible ? 'block' : 'none';
+			} else {
+				STATE.settingsVisible = true;
+				UI.createSettingsPanel();
+			}
+		},
 	};
 
 	// ===== ПРОВЕРКА ВАКАНСИИ =====
@@ -1586,11 +1569,6 @@
 				return { error: true, message: 'Требуется тест' };
 			}
 
-			// Проверяем, не закрыта ли вакансия
-			if (data.response_letter_required === false && data.allow_messages === false) {
-				return { error: true, message: 'Отклики закрыты' };
-			}
-
 			return { error: false, data };
 		} catch (err) {
 			clearTimeout(timeoutId);
@@ -1624,6 +1602,7 @@
 					message: 'Дубликат',
 				});
 				STATE.totalSkipped++;
+				STATE.currentVacancy = null; // Сбрасываем текущую вакансию при пропуске дубликата
 				return;
 			}
 
@@ -1638,6 +1617,7 @@
 					message: statusCheck.message,
 				});
 				STATE.totalSkipped++;
+				STATE.currentVacancy = null; // Сбрасываем текущую вакансию при ошибке
 				return;
 			}
 
@@ -1652,6 +1632,7 @@
 					message: 'Нет токена',
 				});
 				STATE.totalErrors++;
+				STATE.currentVacancy = null; // Сбрасываем текущую вакансию при ошибке
 				return;
 			}
 
@@ -1718,8 +1699,10 @@
 						message: 'Требуется тест',
 					});
 					STATE.totalSkipped++;
+					STATE.currentVacancy = null; // Сбрасываем текущую вакансию при ошибке
 					return;
 				} else if (errorCode === 'already_responded') {
+					STATE.consecutiveAlreadyApplied++;
 					Logger.saveLog({
 						id: vacancyId,
 						title,
@@ -1729,6 +1712,21 @@
 					});
 					Responses.markAsResponded(vacancyId);
 					STATE.totalSkipped++;
+
+					// Останавливаем при 3 подряд Already applied
+					if (STATE.consecutiveAlreadyApplied >= 3) {
+						console.log('🛑 Достигнуто 3 подряд Already applied. Останавливаю процесс.');
+						UI.showNotification(
+							'Остановка',
+							'Обнаружено 3 подряд уже отправленных отклика. Процесс остановлен.',
+							'warning',
+							6000
+						);
+						STATE.currentVacancy = null; // Сбрасываем текущую вакансию при остановке
+						stopProcess();
+					} else {
+						STATE.currentVacancy = null; // Сбрасываем текущую вакансию после обработки Already applied
+					}
 					return;
 				} else if (retryCount < CONFIG.MAX_RETRIES) {
 					// Логика повторных попыток: при сетевых ошибках делаем повторные попытки с фиксированной задержкой
@@ -1755,6 +1753,8 @@
 			} else {
 				STATE.responsesCount++;
 				STATE.consecutiveFailures = 0; // Сбрасываем счетчик при успехе
+				STATE.consecutiveAlreadyApplied = 0; // Сбрасываем счетчик Already applied при успехе
+				STATE.currentVacancy = null; // Сбрасываем текущую вакансию после успешного отклика
 				Responses.markAsResponded(vacancyId);
 				Logger.saveLog({
 					id: vacancyId,
@@ -1789,6 +1789,7 @@
 				});
 				STATE.totalErrors++;
 				STATE.consecutiveFailures++;
+				STATE.currentVacancy = null; // Сбрасываем текущую вакансию при ошибке
 
 				// Не паузим процесс, продолжаем с экспоненциальной задержкой
 			}
@@ -2174,14 +2175,9 @@
 		// Определяем тип страницы
 		const pageType = Utils.detectPageType();
 
-		// Для главной страницы - не обрабатываем вакансии
+		// Для главной страницы - нормализуем URL для обработки вакансий
 		if (pageType === 'home') {
-			UI.showNotification(
-				'Главная страница',
-				'На главной странице HH.ru нет вакансий для обработки',
-				'info'
-			);
-			return;
+			url = Utils.normalizeUrl(url);
 		}
 
 		// Для страницы вакансии - одиночный отклик
@@ -2217,6 +2213,7 @@
 		STATE.totalPauseTime = 0;
 		STATE.currentVacancy = null;
 		STATE.consecutiveFailures = 0;
+		STATE.consecutiveAlreadyApplied = 0;
 
 		// Обновляем UI
 		const btn = document.getElementById('hh-api-button');
@@ -2291,6 +2288,7 @@
 		STATE.totalPauseTime = 0;
 		STATE.currentVacancy = vacancyData.title;
 		STATE.consecutiveFailures = 0;
+		STATE.consecutiveAlreadyApplied = 0;
 
 		// Обновляем UI
 		const btn = document.getElementById('hh-api-button');
@@ -2590,7 +2588,7 @@
 
 			// Кнопка настроек
 			const settingsBtn = UIBuilder.createControlButton('⚙️', 'Настройки', '#6366f1', () => {
-				UI.openSettings();
+				UI.switchSettings();
 			});
 
 			// Кнопка статистики
@@ -2648,102 +2646,8 @@
 		},
 
 		createPageTypeIndicator: (container) => {
-			const pageType = Utils.detectPageType();
-			let indicatorText = '';
-			let indicatorColor = '#6b7280';
-			let indicatorIcon = '📄';
-
-			switch (pageType) {
-				case 'home':
-					indicatorText = 'Главная страница HH.ru';
-					indicatorIcon = '🏠';
-					indicatorColor = '#6b7280';
-					break;
-				case 'vacancy':
-					const vacancyData = Utils.getCurrentVacancyData();
-					if (vacancyData) {
-						indicatorText = `Вакансия: ${vacancyData.title}`;
-						indicatorIcon = '🎯';
-						indicatorColor =
-							Utils.hasRespondButton() && !Utils.isVacancyClosed() ? '#10b981' : '#f59e0b';
-					} else {
-						indicatorText = 'Не удалось определить вакансию';
-						indicatorIcon = '⚠️';
-						indicatorColor = '#ef4444';
-					}
-					break;
-				case 'search':
-					indicatorText = 'Страница поиска вакансий';
-					indicatorIcon = '🔍';
-					indicatorColor = '#3b82f6';
-					break;
-				case 'employer':
-					indicatorText = 'Страница работодателя';
-					indicatorIcon = '🏢';
-					indicatorColor = '#8b5cf6';
-					break;
-				case 'resume':
-					indicatorText = 'Страница резюме';
-					indicatorIcon = '📄';
-					indicatorColor = '#6b7280';
-					break;
-				default:
-					indicatorText = 'Другая страница HH.ru';
-					indicatorIcon = '📄';
-					indicatorColor = '#6b7280';
-			}
-
-			const indicator = document.createElement('div');
-			indicator.id = 'hh-page-type-indicator';
-			indicator.style.cssText = `
-				padding: 8px 12px;
-				background: ${indicatorColor}15;
-				border: 1px solid ${indicatorColor}30;
-				border-radius: 8px;
-				font-size: 12px;
-				color: ${indicatorColor};
-				font-weight: 500;
-				text-align: center;
-				margin-bottom: 8px;
-				display: flex;
-				align-items: center;
-				justify-content: center;
-				gap: 6px;
-			`;
-			indicator.innerHTML = `${indicatorIcon} ${indicatorText}`;
-
-			// Вставляем перед полем ввода
-			const input = container.querySelector('#hh-api-filter-url');
-			if (input) {
-				container.insertBefore(indicator, input);
-			} else {
-				container.appendChild(indicator);
-			}
-
-			// Добавляем информацию о RESUME_HASH
-			const resumeInfo = document.createElement('div');
-			resumeInfo.style.cssText = `
-				padding: 6px 12px;
-				background: ${CONFIG.RESUME_HASH ? '#10b98115' : '#ef444415'};
-				border: 1px solid ${CONFIG.RESUME_HASH ? '#10b98130' : '#ef444430'};
-				border-radius: 8px;
-				font-size: 11px;
-				color: ${CONFIG.RESUME_HASH ? '#059669' : '#dc2626'};
-				font-weight: 500;
-				text-align: center;
-				margin-top: 4px;
-				display: flex;
-				align-items: center;
-				justify-content: center;
-				gap: 6px;
-			`;
-			resumeInfo.innerHTML = `${CONFIG.RESUME_HASH ? '✅' : '⚠️'} RESUME_HASH: ${
-				CONFIG.RESUME_HASH ? 'установлен' : 'не установлен'
-			}`;
-
-			container.insertBefore(resumeInfo, indicator.nextSibling);
-
-			return indicator;
+			// Индикаторы типа страницы и RESUME_HASH удалены по требованию
+			return null;
 		},
 
 		createFloatingButton: () => {
