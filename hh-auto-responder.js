@@ -1,4 +1,15 @@
-(() => {
+// ==UserScript==
+// @name           HH.ru Custom Script
+// @namespace      http://tampermonkey.net/
+// @version        1.0
+// @description    Автооткликер на HeadHunter
+// @author         Genzor
+// @match          https://hh.ru/*
+// @icon           https://www.google.com/s2/favicons?sz=64&domain=hh.ru
+// @grant          none
+// ==/UserScript==
+
+(function () {
 	'use strict';
 
 	// ===== КОНФИГУРАЦИЯ =====
@@ -51,10 +62,11 @@
 		uiCollapsed: false,
 		modalVisible: true,
 		settingsVisible: false,
-		progressVisible: true,
 		currentVacancy: null,
 		consecutiveFailures: 0,
 		consecutiveAlreadyApplied: 0,
+		consecutiveDuplicates: 0,
+		autoSaveInterval: null,
 		settings: {
 			autoFindResume: true,
 			showNotifications: true,
@@ -385,13 +397,17 @@
 			const hour = new Date().getHours();
 			let multiplier = 1;
 
-			// Ночные часы - больше задержка
-			if (hour >= 23 || hour <= 6) {
+			// Ночные часы (23:00-06:59) - больше задержка
+			if (hour >= 23 || hour < 7) {
 				multiplier = 1.5;
 			}
-			// Рабочие часы - меньше задержка
-			else if (hour >= 9 && hour <= 18) {
+			// Рабочие часы (07:00-18:59) - меньше задержка
+			else if (hour >= 7 && hour <= 18) {
 				multiplier = 0.8;
+			}
+			// Вечерние часы (19:00-22:59) - базовая задержка
+			else {
+				multiplier = 1;
 			}
 
 			return Math.floor(CONFIG.DELAY_BETWEEN_RESPONSES * multiplier);
@@ -413,8 +429,12 @@
 			if (!parsedSalary) return { passed: true };
 
 			if (CONFIG.MIN_SALARY > 0) {
-				const salaryValue = parsedSalary.to || parsedSalary.from;
-				if (salaryValue && salaryValue < CONFIG.MIN_SALARY) {
+				// Проверяем MIN_SALARY: вакансия проходит, если максимальная зарплата >= MIN_SALARY
+				// Если указан диапазон (from-to), проверяем максимальное значение (to)
+				// Если указано только "от" (from), проверяем from
+				// Если указано только "до" (to), проверяем to
+				const maxSalary = parsedSalary.to || parsedSalary.from;
+				if (maxSalary && maxSalary < CONFIG.MIN_SALARY) {
 					return {
 						passed: false,
 						reason: `Зарплата ниже ${Utils.formatNumber(CONFIG.MIN_SALARY)}`,
@@ -423,8 +443,12 @@
 			}
 
 			if (CONFIG.MAX_SALARY > 0) {
-				const salaryValue = parsedSalary.from || parsedSalary.to;
-				if (salaryValue && salaryValue > CONFIG.MAX_SALARY) {
+				// Проверяем MAX_SALARY: вакансия проходит, если минимальная зарплата <= MAX_SALARY
+				// Если указан диапазон (from-to), проверяем минимальное значение (from)
+				// Если указано только "от" (from), проверяем from
+				// Если указано только "до" (to), проверяем to
+				const minSalary = parsedSalary.from || parsedSalary.to;
+				if (minSalary && minSalary > CONFIG.MAX_SALARY) {
 					return {
 						passed: false,
 						reason: `Зарплата выше ${Utils.formatNumber(CONFIG.MAX_SALARY)}`,
@@ -531,9 +555,6 @@
 			if (entry.success) {
 				Utils.playNotificationSound();
 			}
-
-			// Обновляем прогресс
-			ProgressTracker.update();
 		},
 
 		updateStats: () => {
@@ -641,135 +662,17 @@
 		},
 
 		getSentToday: () => {
+			// Используем логи для подсчета, так как они содержат timestamp
+			// Но также проверяем SENT_RESPONSES_KEY для надежности
 			const logs = Logger.getLogs();
 			const today = new Date().toDateString();
-			return logs.filter((log) => log.success && new Date(log.time).toDateString() === today)
-				.length;
-		},
-	};
+			const fromLogs = logs.filter(
+				(log) => log.success && new Date(log.time).toDateString() === today
+			).length;
 
-	// ===== ТРЕКЕР ПРОГРЕССА =====
-	const ProgressTracker = {
-		update: () => {
-			if (!STATE.progressVisible) return;
-
-			try {
-				const progressBar = document.getElementById('hh-progress-bar');
-				if (!progressBar) return;
-
-				const stats = Utils.getFormattedStats();
-				const percentage =
-					STATE.totalProcessed > 0
-						? Math.round((STATE.responsesCount / STATE.totalProcessed) * 100)
-						: 0;
-
-				// Обновляем текст в progress-text-left (в HTML это .progress-text-left)
-				const progressTextLeft = progressBar.querySelector('.progress-text-left');
-				if (progressTextLeft) {
-					progressTextLeft.textContent = `${stats.totalSent} / ${stats.totalProcessed} (${percentage}%)`;
-				}
-
-				// Обновляем все элементы прогресс-бара
-				const progressFill = progressBar.querySelector('.progress-fill');
-				const progressText = progressBar.querySelector('.progress-text');
-				const progressBadge = progressBar.querySelector('.progress-badge');
-				const progressTxtSent = progressBar.querySelector('.progress-txt-sent');
-				const progressTxtSkipped = progressBar.querySelector('.progress-txt-skipped');
-				const progressTxtErrors = progressBar.querySelector('.progress-txt-errors');
-				const progressTxtRuntime = progressBar.querySelector('.progress-txt-runtime');
-
-				if (progressFill) progressFill.style.width = `${Math.min(percentage, 100)}%`;
-				if (progressText)
-					progressText.textContent = `${stats.totalSent}/${stats.totalProcessed} (${stats.successRate}%)`;
-				if (progressBadge) progressBadge.textContent = `${percentage}%`;
-				if (progressTxtSent) progressTxtSent.textContent = stats.totalSent;
-				if (progressTxtSkipped) progressTxtSkipped.textContent = stats.totalSkipped;
-				if (progressTxtErrors) progressTxtErrors.textContent = stats.totalErrors;
-				if (progressTxtRuntime) progressTxtRuntime.textContent = stats.runningTime;
-			} catch (error) {
-				console.error('Ошибка обновления прогресса:', error);
-			}
-		},
-
-		create: () => {
-			const existing = document.getElementById('hh-progress-bar');
-			if (existing) return existing;
-
-			const progressBar = document.createElement('div');
-			progressBar.id = 'hh-progress-bar';
-			progressBar.style.cssText = `
-				position: fixed;
-				top: 32px;
-				left: 50%;
-				transform: translateX(-50%);
-				width: 430px;
-				height: 84px;
-				background: rgba(248, 250, 252, 1);
-				border-radius: 16px;
-				box-shadow: 0 8px 32px rgba(16, 185, 129, 0.09), 0 2px 2px rgba(0,0,0,.03);
-				border: 1px solid #e5e7eb;
-				z-index: 10003;
-				padding: 18px 22px 14px 22px;
-				display: ${STATE.progressVisible ? 'block' : 'none'};
-				backdrop-filter: blur(10px);
-				transition: box-shadow .25s;
-				font-family: "Segoe UI", system-ui, sans-serif;
-			`;
-
-			progressBar.innerHTML = `
-				<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-					<span style="font-size: 16px; font-weight: 700; color: #059669; letter-spacing:0.01em;">${'📊 '}Прогресс откликов</span>
-					<button id="progress-close" title="Скрыть" style="background: none; border: none; font-size: 22px; line-height:1; cursor: pointer; color: #9CA3AF; transition: color .16s;">×</button>
-				</div>
-				<div style="display: flex; align-items: center; gap: 10px;">
-					<div style="flex:1;">
-						<div style="width: 100%; height: 22px; background: #f3f4f6; border-radius: 11px; overflow: hidden; position:relative;">
-							<div class="progress-fill"
-								style="height: 100%; background: linear-gradient(90deg, #10b981 0%, #059669 100%); width: 0%; min-width: 4%; transition: width 0.45s cubic-bezier(.4,2,.6,1);"></div>
-						</div>
-						<div style="display:flex; justify-content:space-between; margin-top:2px;">
-							<div class="progress-text-left" style="font-size:11px; color:#64748b;">0 / 0 (${0}%)</div>
-							<div class="progress-text-right" style="font-size:11px; color:#64748b;"></div>
-						</div>
-					</div>
-					<div style="flex: none; width: 60px; text-align: right;">
-						<div class="progress-badge" style="
-							display:inline-block;
-							background: #ecfdf5;
-							color: #059669;
-							font-weight: bold;
-							font-size: 13px;
-							border-radius: 7px;
-							padding: 2px 10px;
-							border: 1px solid #d1fae5;
-							box-shadow:0 2px 4px rgba(16,185,129,.07);
-							letter-spacing:0.02em;
-							">0%</div>
-					</div>
-				</div>
-				<div style="margin-top: 7px; display:flex; gap:16px; align-items: center; font-size:11.5px; color: #6b7280;">
-					<div class="progress-detail-sent" title="Отправлено" style="display:flex;align-items:center;gap:3px;">
-						<span style="color:#059669;font-size:13px;">⬆️</span> <span class="progress-txt-sent">0</span> откликов
-					</div>
-					<div class="progress-detail-skipped" title="Пропущено" style="display:flex;align-items:center;gap:3px;">
-						<span style="color:#a8a29e;font-size:13px;">⏭️</span> <span class="progress-txt-skipped">0</span> пропущено
-					</div>
-					<div class="progress-detail-errors" title="Ошибок" style="display:flex;align-items:center;gap:3px;">
-						<span style="color:#ef4444;font-size:13px;">⛔</span> <span class="progress-txt-errors">0</span> ошибок
-					</div>
-					<div class="progress-detail-time" title="Время работы" style="margin-left:auto; font-variant-numeric: tabular-nums;">
-						🕒 <span class="progress-txt-runtime">00:00</span>
-					</div>
-				</div>
-			`;
-
-			progressBar.querySelector('#progress-close').onclick = () => {
-				STATE.progressVisible = false;
-				progressBar.style.display = 'none';
-			};
-
-			document.body.appendChild(progressBar);
-			return progressBar;
+			// Дополнительная проверка: если логи очищены, используем общий счетчик
+			// Но это менее точно, так как SENT_RESPONSES_KEY не содержит дату
+			return fromLogs;
 		},
 	};
 
@@ -817,6 +720,7 @@
 							border-radius: 3px;
 						}
 						.modal-header {
+							position: relative;
 							display: flex;
 							justify-content: space-between;
 							align-items: center;
@@ -834,8 +738,11 @@
 							gap: 8px;
 						}
 						.modal-close {
-							background: none;
-							border: none;
+							position: absolute;
+							top: 20px;
+							right: 20px;
+							background: rgba(255, 255, 255, 0.95);
+							border: 1px solid #e5e7eb;
 							font-size: 24px;
 							cursor: pointer;
 							color: #64748b;
@@ -843,6 +750,8 @@
 							border-radius: 8px;
 							transition: all 0.2s ease;
 							line-height: 1;
+							z-index: 10002;
+							box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 						}
 						.modal-close:hover {
 							background: #f1f5f9;
@@ -928,16 +837,6 @@
 							font-weight: 700;
 							color: #1e40af;
 						}
-						.current-status {
-							background: #fef3c7;
-							color: #92400e;
-							padding: 8px 12px;
-							border-radius: 8px;
-							font-size: 12px;
-							font-weight: 600;
-							margin-bottom: 16px;
-							text-align: center;
-						}
 						@media (max-width: 600px) {
 							#hh-api-modal {
 								width: 90%;
@@ -950,7 +849,6 @@
 						<h3 class="modal-title">📤 Отправленные отклики</h3>
 						<button class="modal-close">×</button>
 					</div>
-					<div id="current-status" class="current-status" style="display: none;"></div>
 					<ul class="log-list"></ul>
 					<div class="stats-container">
 						<div class="stats-title">📊 Статистика</div>
@@ -958,7 +856,8 @@
 					</div>
 				`;
 
-				modal.querySelector('.modal-close').onclick = () => {
+				const closeBtn = modal.querySelector('.modal-close');
+				closeBtn.onclick = () => {
 					STATE.modalVisible = false;
 					modal.style.display = 'none';
 				};
@@ -974,24 +873,12 @@
 			const modal = UI.createModal();
 			const list = modal.querySelector('.log-list');
 			const statsGrid = modal.querySelector('.stats-grid');
-			const statusDiv = modal.querySelector('#current-status');
 
 			if (!list) return;
 
-			// Обновляем текущий статус
-			try {
-				if (statusDiv) {
-					if (STATE.isRunning) {
-						statusDiv.style.display = 'block';
-						statusDiv.innerHTML = STATE.isPaused
-							? '⏸️ Приостановлено'
-							: `🔄 Обрабатывается: ${STATE.currentVacancy || 'загрузка...'}`;
-					} else {
-						statusDiv.style.display = 'none';
-					}
-				}
-			} catch (error) {
-				console.error('Ошибка обновления статуса:', error);
+			// Обновляем позицию крестика при обновлении модального окна
+			if (modal._updateClosePosition) {
+				setTimeout(() => modal._updateClosePosition(), 0);
 			}
 
 			// Добавляем новую запись
@@ -1181,9 +1068,27 @@
 		toggleFloatingUI: () => {
 			const uiContainer = document.getElementById('hh-api-ui-container');
 			const floatingBtn = document.getElementById('hh-floating-button');
+			const modal = document.getElementById('hh-api-modal');
+			const settingsPanel = document.getElementById('hh-settings-panel');
+
 			if (uiContainer && floatingBtn) {
 				STATE.uiCollapsed = !STATE.uiCollapsed;
 				uiContainer.style.display = STATE.uiCollapsed ? 'none' : 'flex';
+
+				// При скрытии интерфейса закрываем все окна
+				if (STATE.uiCollapsed) {
+					// Закрываем модальное окно статистики
+					if (modal) {
+						STATE.modalVisible = false;
+						modal.style.display = 'none';
+					}
+
+					// Закрываем панель настроек
+					if (settingsPanel) {
+						STATE.settingsVisible = false;
+						settingsPanel.style.display = 'none';
+					}
+				}
 
 				// Обновляем текст плавающей кнопки
 				UIBuilder.updateFloatingButtonText();
@@ -1217,11 +1122,11 @@
 			`;
 
 			panel.innerHTML = `
-				<div style="padding: 32px;">
+				<div style="padding: 32px; position: relative;">
 					<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 32px;">
 						<h2 style="margin: 0; font-size: 24px; font-weight: 700; color: #1e293b;">⚙️ Настройки</h2>
-						<button id="settings-close" style="background: none; border: none; font-size: 28px; cursor: pointer; color: #64748b; padding: 8px; border-radius: 8px;">×</button>
 					</div>
+					<button id="settings-close" style="position: absolute; top: 20px; right: 20px; background: rgba(255, 255, 255, 0.95); border: 1px solid #e5e7eb; font-size: 28px; cursor: pointer; color: #64748b; padding: 8px; border-radius: 8px; z-index: 10006; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);">×</button>
 
 					<div style="display: grid; gap: 24px;">
 						<!-- Основные настройки -->
@@ -1333,7 +1238,8 @@
 			`;
 
 			// Обработчики событий
-			panel.querySelector('#settings-close').onclick = () => {
+			const settingsCloseBtn = panel.querySelector('#settings-close');
+			settingsCloseBtn.onclick = () => {
 				STATE.settingsVisible = false;
 				panel.style.display = 'none';
 			};
@@ -1594,6 +1500,7 @@
 		try {
 			// Проверяем, не отправляли ли уже отклик
 			if (STATE.settings.skipDuplicates && Responses.isAlreadyResponded(vacancyId)) {
+				STATE.consecutiveDuplicates++;
 				Logger.saveLog({
 					id: vacancyId,
 					title,
@@ -1603,12 +1510,29 @@
 				});
 				STATE.totalSkipped++;
 				STATE.currentVacancy = null; // Сбрасываем текущую вакансию при пропуске дубликата
+
+				// Останавливаем при 3 подряд дубликатах
+				if (STATE.consecutiveDuplicates >= 3) {
+					console.log('🛑 Достигнуто 3 подряд дубликата. Останавливаю процесс.');
+					UI.showNotification(
+						'Остановка',
+						'Обнаружено 3 подряд дубликата. Процесс остановлен.',
+						'warning',
+						6000
+					);
+					stopProcess();
+				}
 				return;
+			} else {
+				// Сбрасываем счетчик дубликатов при успешной проверке
+				STATE.consecutiveDuplicates = 0;
 			}
 
 			// Проверяем статус вакансии
 			const statusCheck = await checkVacancyStatus(vacancyId);
 			if (statusCheck.error) {
+				// Сбрасываем счетчик дубликатов при пропуске по другим причинам
+				STATE.consecutiveDuplicates = 0;
 				Logger.saveLog({
 					id: vacancyId,
 					title,
@@ -1623,6 +1547,8 @@
 
 			const xsrf = Utils.getXsrfToken();
 			if (!xsrf) {
+				// Сбрасываем счетчик дубликатов при ошибке токена
+				STATE.consecutiveDuplicates = 0;
 				console.error('❌ _xsrf-токен не найден');
 				Logger.saveLog({
 					id: vacancyId,
@@ -1754,6 +1680,7 @@
 				STATE.responsesCount++;
 				STATE.consecutiveFailures = 0; // Сбрасываем счетчик при успехе
 				STATE.consecutiveAlreadyApplied = 0; // Сбрасываем счетчик Already applied при успехе
+				STATE.consecutiveDuplicates = 0; // Сбрасываем счетчик дубликатов при успехе
 				STATE.currentVacancy = null; // Сбрасываем текущую вакансию после успешного отклика
 				Responses.markAsResponded(vacancyId);
 				Logger.saveLog({
@@ -1799,7 +1726,16 @@
 	// ===== ОБРАБОТКА СТРАНИЦ =====
 	async function processPage(url, pageNum) {
 		let pageUrl = Utils.normalizeUrl(url);
-		pageUrl = pageUrl.includes('?') ? `${pageUrl}&page=${pageNum}` : `${pageUrl}?page=${pageNum}`;
+
+		// Правильно добавляем параметр page, не ломая существующие параметры
+		try {
+			const urlObj = new URL(pageUrl);
+			urlObj.searchParams.set('page', pageNum);
+			pageUrl = urlObj.toString();
+		} catch {
+			// Fallback на старую логику, если URL некорректен
+			pageUrl = pageUrl.includes('?') ? `${pageUrl}&page=${pageNum}` : `${pageUrl}?page=${pageNum}`;
+		}
 
 		console.log(`📄 Обрабатываю страницу ${pageNum + 1}: ${pageUrl}`);
 
@@ -1886,6 +1822,8 @@
 				// Применяем фильтры
 				const filterResult = Filters.shouldSkipVacancy(vacancyData);
 				if (filterResult.skip) {
+					// Сбрасываем счетчик дубликатов при пропуске по фильтрам
+					STATE.consecutiveDuplicates = 0;
 					console.log(
 						`⏭️ Пропускаю вакансию ${vacancyData.id}: ${filterResult.reasons.join(', ')}`
 					);
@@ -1916,6 +1854,7 @@
 				if (i < cards.length - 1) {
 					// Не делаем задержку после последней вакансии
 					let delay = Utils.getSmartDelay();
+					const smartDelay = delay;
 
 					// Логика экспоненциальной задержки: при последовательных неудачах увеличиваем задержку
 					// Это предотвращает перегрузку сервера и дает время на восстановление
@@ -1924,8 +1863,10 @@
 						const exponentialDelay = Math.pow(2, STATE.consecutiveFailures - 1) * 1000; // 1с, 2с, 4с, 8с...
 						delay = Math.max(delay, exponentialDelay);
 						console.log(
-							`⚠️ Экспоненциальная задержка ${exponentialDelay}мс из-за ${STATE.consecutiveFailures} подряд неудач`
+							`⚠️ Задержка ${delay}мс (умная: ${smartDelay}мс, экспоненциальная: ${exponentialDelay}мс) из-за ${STATE.consecutiveFailures} подряд неудач`
 						);
+					} else {
+						console.log(`⏰ Умная задержка ${delay}мс`);
 					}
 
 					console.log(`⏳ Задержка ${delay}мс перед следующей вакансией...`);
@@ -2095,9 +2036,15 @@
 
 	// ===== УПРАВЛЕНИЕ ПРОЦЕССОМ =====
 	function stopProcess() {
+		// Защита от множественных вызовов
+		if (!STATE.isRunning) return;
+
 		STATE.isRunning = false;
 		STATE.isPaused = false;
 		STATE.currentVacancy = null;
+
+		// Очищаем интервал автосохранения, если он был создан
+		// (хотя на самом деле он должен работать постоянно, но на всякий случай)
 
 		const btn = document.getElementById('hh-api-button');
 		if (btn) {
@@ -2124,14 +2071,6 @@
 			'info',
 			6000
 		);
-
-		// Скрываем прогресс-бар
-		const progressBar = document.getElementById('hh-progress-bar');
-		if (progressBar) {
-			setTimeout(() => {
-				progressBar.style.display = 'none';
-			}, 3000);
-		}
 	}
 
 	function pauseProcess() {
@@ -2161,6 +2100,12 @@
 	}
 
 	function startProcess(url) {
+		// Защита от множественных запусков
+		if (STATE.isRunning) {
+			console.warn('⚠️ Процесс уже запущен, игнорирую повторный запуск');
+			return;
+		}
+
 		// Проверяем RESUME_HASH
 		if (!CONFIG.RESUME_HASH) {
 			UI.showNotification(
@@ -2214,6 +2159,7 @@
 		STATE.currentVacancy = null;
 		STATE.consecutiveFailures = 0;
 		STATE.consecutiveAlreadyApplied = 0;
+		STATE.consecutiveDuplicates = 0;
 
 		// Обновляем UI
 		const btn = document.getElementById('hh-api-button');
@@ -2228,8 +2174,7 @@
 			pauseBtn.textContent = '⏸️ Пауза';
 		}
 
-		// Показываем прогресс и модальное окно
-		ProgressTracker.create();
+		// Показываем модальное окно
 		UI.openModal();
 
 		UI.showNotification('Запущено', 'Начинаю отправку откликов', 'success');
@@ -2297,8 +2242,7 @@
 			btn.style.background = 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)';
 		}
 
-		// Показываем прогресс
-		ProgressTracker.create();
+		// Показываем модальное окно
 		UI.openModal();
 
 		UI.showNotification('Запущено', `Отправляю отклик на: ${vacancyData.title}`, 'success');
@@ -2776,8 +2720,9 @@
 		}
 
 		// Автосохранение конфигурации каждые 30 секунд
+		// Сохраняем ID интервала для возможной очистки
 		if (STATE.settings.autoSaveConfig) {
-			setInterval(() => {
+			STATE.autoSaveInterval = setInterval(() => {
 				Utils.saveConfig();
 			}, 30000);
 		}

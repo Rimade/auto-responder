@@ -44,19 +44,27 @@ const CONFIG = {
 };
 ```
 
-### 3. Запустите в браузере
+### 3. Установите скрипт через Tampermonkey
 
-**Вариант A (единоразово):**
+**Установка Tampermonkey:**
+1. Установите расширение [Tampermonkey](https://www.tampermonkey.net/) для вашего браузера:
+   - [Chrome](https://chrome.google.com/webstore/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo)
+   - [Firefox](https://addons.mozilla.org/firefox/addon/tampermonkey/)
+   - [Edge](https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd)
+   - [Opera](https://addons.opera.com/extensions/details/tampermonkey-beta/)
+
+**Добавление скрипта:**
+1. Откройте Tampermonkey (иконка в панели расширений)
+2. Выберите "Создать новый скрипт..."
+3. Удалите весь шаблонный код
+4. Скопируйте и вставьте весь код из `hh-auto-responder.js`
+5. Нажмите Ctrl+S (или Cmd+S на Mac) для сохранения
+6. Скрипт автоматически активируется на всех страницах hh.ru
+
+**Альтернативный способ (единоразово):**
 1. Откройте любую страницу hh.ru
 2. F12 → Console → вставьте код из `hh-auto-responder.js` → Enter
 3. Панель появится внизу справа
-
-**Вариант B (через Scripty - постоянно):**
-1. Откройте https://scripty.abhisheksatre.com/
-2. Вставьте код из `hh-auto-responder.js`
-3. Site URL: `https://hh.ru/*`
-4. Create Script → добавьте в закладки
-5. На любой странице hh.ru запускайте скрипт одним кликом
 
 ---
 
