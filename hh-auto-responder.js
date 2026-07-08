@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name           HH.ru Custom Script
 // @namespace      http://tampermonkey.net/
-// @version        1.2
+// @version        1.3
 // @description    Автооткликер на HeadHunter
 // @author         Genzor
 // @match          https://hh.ru/*
@@ -91,7 +91,7 @@
 		validateUrl: (url) => {
 			try {
 				const urlObj = new URL(url);
-				return urlObj.hostname === 'hh.ru' || urlObj.hostname === 'www.hh.ru';
+				return /(^|\.)hh\.ru$/i.test(urlObj.hostname);
 			} catch {
 				return false;
 			}
@@ -117,6 +117,11 @@
 			// Страница поиска вакансий
 			if (path.includes('/search/vacancy') || url.includes('search/vacancy')) {
 				return 'search';
+			}
+
+			// Подборка вакансий вида /vacancies/devops (не то же самое, что /search/vacancy)
+			if (/^\/vacancies\/[^/]+\/?$/i.test(path)) {
+				return 'collection';
 			}
 
 			// Страница работодателя
@@ -350,6 +355,49 @@
 			}
 		},
 
+		convertToSearchUrl: (url) => {
+			try {
+				const urlObj = new URL(url);
+
+				const collectionMatch = urlObj.pathname.match(/^\/vacancies\/([^/]+)\/?$/i);
+				if (collectionMatch) {
+					const keyword = decodeURIComponent(collectionMatch[1].replace(/\+/g, ' '));
+					const searchUrl = new URL('/search/vacancy', urlObj.origin);
+					searchUrl.searchParams.set('text', keyword);
+					searchUrl.searchParams.set('search_field', 'name');
+					searchUrl.searchParams.set('items_on_page', '20');
+					return { url: searchUrl.toString(), converted: true, reason: 'collection' };
+				}
+
+				return { url, converted: false };
+			} catch {
+				return { url, converted: false };
+			}
+		},
+
+		getUrlHelpMessage: (url) => {
+			try {
+				const urlObj = new URL(url);
+				const path = urlObj.pathname;
+
+				if (/^\/vacancies\/[^/]+\/?$/i.test(path)) {
+					return 'Ссылка /vacancies/... — это подборка, а не поиск с фильтрами. Скопируйте URL из адресной строки после поиска: hh.ru/search/vacancy?text=devops&area=...';
+				}
+
+				if (/\/vacancy\/\d+/.test(path)) {
+					return 'Это ссылка на одну вакансию (/vacancy/123). Для массовых откликов откройте поиск: hh.ru/search/vacancy?text=...';
+				}
+
+				if (path === '/' || path === '') {
+					return 'Откройте hh.ru/search/vacancy?text=... с нужными фильтрами и запустите оттуда.';
+				}
+			} catch {
+				// ignore
+			}
+
+			return 'Нужна ссылка на поиск вакансий: hh.ru/search/vacancy?text=...&area=...';
+		},
+
 		normalizeUrl: (url) => {
 			try {
 				const urlObj = new URL(url);
@@ -437,6 +485,10 @@
 				return trimmedInput || currentUrl;
 			}
 
+			if (pageType === 'collection') {
+				return trimmedInput || currentUrl;
+			}
+
 			if (!trimmedInput) {
 				return null;
 			}
@@ -445,23 +497,35 @@
 		},
 
 		prepareProcessUrl: (url) => {
-			const normalized = Utils.normalizeUrl(url);
+			const converted = Utils.convertToSearchUrl(url);
+			const normalized = Utils.normalizeUrl(converted.url);
+
 			if (!normalized) {
 				return {
 					url: null,
-					error:
-						'Нужна ссылка на поиск вакансий с фильтрами. Откройте hh.ru/search/vacancy?... и запустите оттуда.',
+					error: Utils.getUrlHelpMessage(url),
+					converted: false,
 				};
 			}
 
 			if (!normalized.includes('/search/vacancy')) {
 				return {
 					url: null,
-					error: 'Поддерживаются только страницы поиска вакансий (/search/vacancy).',
+					error: Utils.getUrlHelpMessage(url),
+					converted: false,
 				};
 			}
 
-			return { url: normalized, error: null };
+			if (converted.converted) {
+				console.warn('⚠️ Ссылка подборки преобразована в поиск:', url, '→', normalized);
+			}
+
+			return {
+				url: normalized,
+				error: null,
+				converted: converted.converted,
+				originalUrl: converted.converted ? url : null,
+			};
 		},
 
 		formatTime: (ms) => {
@@ -2397,6 +2461,15 @@
 
 		url = prepared.url;
 
+		if (prepared.converted) {
+			UI.showNotification(
+				'Ссылка преобразована',
+				'Подборка /vacancies/... заменена на поиск. Для точных фильтров скопируйте URL из /search/vacancy?...',
+				'warning',
+				7000,
+			);
+		}
+
 		// Проверяем дневной лимит
 		const sentToday = Responses.getSentToday();
 		if (sentToday >= CONFIG.MAX_RESPONSES_PER_DAY) {
@@ -2614,6 +2687,10 @@
 			} else if (pageType === 'employer') {
 				placeholder = 'По умолчанию вакансии этого работодателя. Можно вставить другую ссылку.';
 				defaultValue = window.location.href;
+			} else if (pageType === 'collection') {
+				placeholder =
+					'Подборка /vacancies/... будет преобразована в поиск. Лучше: /search/vacancy?text=...';
+				defaultValue = window.location.href;
 			} else {
 				placeholder = 'Вставьте ссылку на поиск: hh.ru/search/vacancy?...';
 			}
@@ -2694,6 +2771,9 @@
 			} else if (pageType === 'employer') {
 				buttonText = '📤 Отправить отклики';
 				buttonHint = 'Обработать вакансии этого работодателя';
+			} else if (pageType === 'collection') {
+				buttonText = '📤 Отправить отклики';
+				buttonHint = 'Подборка /vacancies/... будет преобразована в поиск';
 			} else {
 				buttonText = '📤 Отправить отклики';
 				buttonHint = 'Вставьте ссылку на поиск вакансий';
@@ -2747,9 +2827,9 @@
 				}
 
 				const inputEl = document.getElementById('hh-api-filter-url');
-				const url = Utils.resolveProcessUrl(inputEl?.value || '');
+				const rawUrl = Utils.resolveProcessUrl(inputEl?.value || '');
 
-				if (!url) {
+				if (!rawUrl) {
 					UI.showNotification(
 						'Ошибка',
 						'Откройте страницу поиска с нужными фильтрами (hh.ru/search/vacancy?...) и запустите оттуда',
@@ -2759,12 +2839,12 @@
 					return;
 				}
 
-				if (!Utils.validateUrl(url)) {
+				if (!Utils.validateUrl(rawUrl)) {
 					UI.showNotification('Ошибка', 'Неверный URL! Введите корректную ссылку с HH.ru', 'error');
 					return;
 				}
 
-				startProcess(url);
+				startProcess(rawUrl);
 			};
 
 			return btn;
@@ -2928,7 +3008,7 @@
 
 	// ===== ИНИЦИАЛИЗАЦИЯ =====
 	function init() {
-		console.log('🚀 HH.ru Auto Responder v1.2 загружен');
+		console.log('🚀 HH.ru Auto Responder v1.3 загружен');
 
 		// Загружаем конфигурацию
 		Utils.loadConfig();
