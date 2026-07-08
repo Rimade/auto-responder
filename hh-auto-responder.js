@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name           HH.ru Custom Script
 // @namespace      http://tampermonkey.net/
-// @version        1.0
+// @version        1.1
 // @description    Автооткликер на HeadHunter
 // @author         Genzor
 // @match          https://hh.ru/*
@@ -17,11 +17,11 @@
 		RESUME_HASH: '', // ⚠️ ОБЯЗАТЕЛЬНО заполнить хеш резюме!
 		COVER_LETTER_TEMPLATE: ``, // ЖЕЛАТЕЛЬНО написать сопроводительное письмо.
 
-		// API endpoints
+		// API endpoints (внутренние hh.ru — публичный api.hh.ru с декабря 2025 отдаёт 403)
 		VACANCY_API_URL: 'https://hh.ru/applicant/vacancy_response/popup',
-		PUBLIC_VACANCY_API: 'https://api.hh.ru/vacancies/',
-		NEGOTIATIONS_API: 'https://hh.ru/applicant/negotiations',
-		RESUMES_API: 'https://hh.ru/applicant/resumes',
+		VACANCY_POPUP_API: 'https://hh.ru/applicant/vacancy_response/popup',
+		RESUMES_API: 'https://hh.ru/shards/applicant/resumes',
+		RESUMES_PAGE_API: 'https://hh.ru/applicant/resumes',
 
 		// Настройки
 		MAX_RESPONSES_PER_DAY: 200,
@@ -206,6 +206,7 @@
 			const selectors = [
 				'[data-qa="vacancy-response-link"]',
 				'[data-qa="vacancy-response"]',
+				'[data-qa="vacancy-serp__vacancy_response"]',
 				'.vacancy-response__button',
 				'button[data-qa*="response"]',
 				'a[href*="response"]',
@@ -232,6 +233,103 @@
 
 		getXsrfToken: () => {
 			return document.cookie.match(/_xsrf=([^;]+)/)?.[1] || '';
+		},
+
+		getHhtmContext: () => {
+			const pageType = Utils.detectPageType();
+			const contexts = {
+				vacancy: { from: 'vacancy', source: 'vacancy_response' },
+				search: { from: 'vacancy_search_list', source: 'vacancy_search_list' },
+				home: { from: 'main', source: 'main' },
+				employer: { from: 'employer', source: 'employer' },
+				resume: { from: 'resume', source: 'resume' },
+			};
+			return contexts[pageType] || { from: 'vacancy_search_list', source: 'vacancy_search_list' };
+		},
+
+		getHhApiHeaders: (xsrf, options = {}) => {
+			const ctx = Utils.getHhtmContext();
+			const headers = {
+				Accept: options.accept || 'application/json',
+				'X-Requested-With': 'XMLHttpRequest',
+				'X-Hhtmfrom': ctx.from,
+				'X-Hhtmsource': ctx.source,
+			};
+
+			if (xsrf) {
+				headers['X-Xsrftoken'] = xsrf;
+			}
+
+			return headers;
+		},
+
+		formatCompensation: (compensation) => {
+			if (!compensation || compensation.noCompensation) return '';
+
+			const { from, to, currencyCode, gross } = compensation;
+			const currency = currencyCode === 'RUR' ? '₽' : currencyCode || '';
+			const grossLabel = gross ? ' до вычета налогов' : ' на руки';
+
+			if (from && to)
+				return `от ${from.toLocaleString('ru-RU')} до ${to.toLocaleString('ru-RU')} ${currency}${grossLabel}`;
+			if (from) return `от ${from.toLocaleString('ru-RU')} ${currency}${grossLabel}`;
+			if (to) return `до ${to.toLocaleString('ru-RU')} ${currency}${grossLabel}`;
+			return '';
+		},
+
+		parseVacanciesFromSearchPage: (html) => {
+			const marker = ',"vacancies":';
+			const markerIndex = html.indexOf(marker);
+			if (markerIndex === -1) return null;
+
+			const jsonStart = html.indexOf('[', markerIndex);
+			if (jsonStart === -1) return null;
+
+			let depth = 0;
+			let jsonEnd = -1;
+
+			for (let i = jsonStart; i < html.length; i++) {
+				const char = html[i];
+				if (char === '[') depth++;
+				else if (char === ']') {
+					depth--;
+					if (depth === 0) {
+						jsonEnd = i;
+						break;
+					}
+				}
+			}
+
+			if (jsonEnd === -1) return null;
+
+			try {
+				const vacancies = JSON.parse(html.slice(jsonStart, jsonEnd + 1));
+				if (!Array.isArray(vacancies) || vacancies.length === 0) return null;
+
+				return vacancies
+					.map((vacancy) => {
+						const vacancyId = vacancy.vacancyId || vacancy.id;
+						if (!vacancyId) return null;
+
+						return {
+							id: String(vacancyId),
+							title: vacancy.name || vacancy.title || 'Без названия',
+							salary: Utils.formatCompensation(vacancy.compensation),
+							company: vacancy.company?.name || '',
+							description: vacancy.snippet?.requirement || vacancy.snippet?.responsibility || '',
+							href:
+								vacancy.links?.desktop ||
+								vacancy.alternateUrl ||
+								`https://hh.ru/vacancy/${vacancyId}`,
+							alreadyApplied: Array.isArray(vacancy.userLabels) && vacancy.userLabels.length > 0,
+							hasTest: Boolean(vacancy.userTestPresent),
+						};
+					})
+					.filter(Boolean);
+			} catch (error) {
+				console.warn('Не удалось распарсить SSR-данные поиска:', error);
+				return null;
+			}
 		},
 
 		normalizeUrl: (url) => {
@@ -285,7 +383,7 @@
 
 			try {
 				const audio = new Audio(
-					'data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIG2m98OScTgwOUarm7blmGgU7k9n1unEiBC13yO/eizEIHWq+8+OWT'
+					'data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIG2m98OScTgwOUarm7blmGgU7k9n1unEiBC13yO/eizEIHWq+8+OWT',
 				);
 				audio.volume = 0.3;
 				audio.play();
@@ -463,7 +561,7 @@
 			if (!STATE.settings.enableFilters || !companyName) return { passed: true };
 
 			const isBlacklisted = CONFIG.BLACKLIST_COMPANIES.some((blacklisted) =>
-				companyName.toLowerCase().includes(blacklisted.toLowerCase())
+				companyName.toLowerCase().includes(blacklisted.toLowerCase()),
 			);
 
 			if (isBlacklisted) {
@@ -481,7 +579,7 @@
 			// Проверяем обязательные ключевые слова
 			if (CONFIG.REQUIRED_KEYWORDS.length > 0) {
 				const hasRequired = CONFIG.REQUIRED_KEYWORDS.some((keyword) =>
-					text.includes(keyword.toLowerCase())
+					text.includes(keyword.toLowerCase()),
 				);
 				if (!hasRequired) {
 					return {
@@ -494,11 +592,11 @@
 			// Проверяем исключающие ключевые слова
 			if (CONFIG.EXCLUDED_KEYWORDS.length > 0) {
 				const hasExcluded = CONFIG.EXCLUDED_KEYWORDS.some((keyword) =>
-					text.includes(keyword.toLowerCase())
+					text.includes(keyword.toLowerCase()),
 				);
 				if (hasExcluded) {
 					const excludedWord = CONFIG.EXCLUDED_KEYWORDS.find((keyword) =>
-						text.includes(keyword.toLowerCase())
+						text.includes(keyword.toLowerCase()),
 					);
 					return { passed: false, reason: `Содержит исключенное слово: ${excludedWord}` };
 				}
@@ -667,7 +765,7 @@
 			const logs = Logger.getLogs();
 			const today = new Date().toDateString();
 			const fromLogs = logs.filter(
-				(log) => log.success && new Date(log.time).toDateString() === today
+				(log) => log.success && new Date(log.time).toDateString() === today,
 			).length;
 
 			// Дополнительная проверка: если логи очищены, используем общий счетчик
@@ -1210,19 +1308,19 @@
 								<div>
 									<label style="display: block; margin-bottom: 4px; font-weight: 500;">Обязательные слова (через запятую):</label>
 									<input type="text" id="setting-required-keywords" value="${CONFIG.REQUIRED_KEYWORDS.join(
-										', '
+										', ',
 									)}" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px;" placeholder="React, JavaScript, Frontend">
 								</div>
 								<div>
 									<label style="display: block; margin-bottom: 4px; font-weight: 500;">Исключающие слова (через запятую):</label>
 									<input type="text" id="setting-excluded-keywords" value="${CONFIG.EXCLUDED_KEYWORDS.join(
-										', '
+										', ',
 									)}" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px;" placeholder="PHP, Java, Backend">
 								</div>
 								<div>
 									<label style="display: block; margin-bottom: 4px; font-weight: 500;">Черный список компаний (через запятую):</label>
 									<input type="text" id="setting-blacklist" value="${CONFIG.BLACKLIST_COMPANIES.join(
-										', '
+										', ',
 									)}" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px;" placeholder="Компания1, Компания2">
 								</div>
 							</div>
@@ -1444,34 +1542,44 @@
 
 	// ===== ПРОВЕРКА ВАКАНСИИ =====
 	async function checkVacancyStatus(vacancyId) {
+		const xsrf = Utils.getXsrfToken();
 		const controller = new AbortController();
 		const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 секунд таймаут
 
 		try {
-			const res = await fetch(CONFIG.PUBLIC_VACANCY_API + vacancyId, {
-				headers: {
-					'User-Agent': navigator.userAgent,
-				},
+			const res = await fetch(`${CONFIG.VACANCY_POPUP_API}?vacancyId=${vacancyId}`, {
+				credentials: 'include',
+				headers: Utils.getHhApiHeaders(xsrf),
 				signal: controller.signal,
 			});
 
 			clearTimeout(timeoutId);
 
 			if (!res.ok) {
-				const errorMsg = `HTTP ${res.status} ${res.statusText}`;
-				console.error(`❌ Сетевая ошибка при проверке вакансии ${vacancyId}: ${errorMsg}`);
+				let errorMsg = `HTTP ${res.status} ${res.statusText}`;
+
+				if (res.status === 403) {
+					try {
+						const body = await res.text();
+						if (body.includes('hhcaptcha') || body.includes('isBot')) {
+							errorMsg = 'Капча / защита от ботов';
+						}
+					} catch {
+						// оставляем исходное сообщение
+					}
+				}
+
+				console.error(`❌ Ошибка проверки вакансии ${vacancyId}: ${errorMsg}`);
 				return { error: true, message: errorMsg };
 			}
 
 			const data = await res.json();
 
-			// Проверяем статус вакансии
 			if (data.archived) {
 				return { error: true, message: 'Архивирована' };
 			}
 
-			// Проверяем требования к тесту
-			if (data.test?.required) {
+			if (data.test?.hasTests || data.test?.required || data.test?.required === true) {
 				return { error: true, message: 'Требуется тест' };
 			}
 
@@ -1518,7 +1626,7 @@
 						'Остановка',
 						'Обнаружено 3 подряд дубликата. Процесс остановлен.',
 						'warning',
-						6000
+						6000,
 					);
 					stopProcess();
 				}
@@ -1567,15 +1675,11 @@
 			form.append('vacancy_id', vacancyId);
 			form.append('resume_hash', CONFIG.RESUME_HASH);
 			form.append('ignore_postponed', 'true');
-			form.append('incomplete', 'false');
-			form.append('mark_applicant_visible_in_vacancy_country', 'false');
-			form.append('lux', 'true');
-			form.append('withoutTest', 'no');
-			form.append('hhtmFromLabel', '');
-			form.append('hhtmSourceLabel', '');
 
 			const coverLetter = CONFIG.COVER_LETTER_TEMPLATE.replace('{#vacancyName}', title);
-			form.append('letter', coverLetter);
+			if (coverLetter.trim()) {
+				form.append('letter', coverLetter);
+			}
 
 			const controller = new AbortController();
 			const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 секунд таймаут
@@ -1583,11 +1687,7 @@
 			const res = await fetch(CONFIG.VACANCY_API_URL, {
 				method: 'POST',
 				credentials: 'include',
-				headers: {
-					'x-xsrftoken': xsrf,
-					'x-requested-with': 'XMLHttpRequest',
-					'User-Agent': navigator.userAgent,
-				},
+				headers: Utils.getHhApiHeaders(xsrf),
 				body: form,
 				signal: controller.signal,
 			});
@@ -1646,7 +1746,7 @@
 							'Остановка',
 							'Обнаружено 3 подряд уже отправленных отклика. Процесс остановлен.',
 							'warning',
-							6000
+							6000,
 						);
 						STATE.currentVacancy = null; // Сбрасываем текущую вакансию при остановке
 						stopProcess();
@@ -1658,7 +1758,7 @@
 					// Логика повторных попыток: при сетевых ошибках делаем повторные попытки с фиксированной задержкой
 					// Это fallback-механизм для временных проблем с сетью или сервером
 					console.log(
-						`Повторная попытка ${retryCount + 1}/${CONFIG.MAX_RETRIES} для вакансии ${vacancyId}`
+						`Повторная попытка ${retryCount + 1}/${CONFIG.MAX_RETRIES} для вакансии ${vacancyId}`,
 					);
 					await Utils.delay(CONFIG.RETRY_DELAY);
 					return respondToVacancy(vacancyId, title, retryCount + 1);
@@ -1702,7 +1802,7 @@
 
 			if (retryCount < CONFIG.MAX_RETRIES) {
 				console.log(
-					`Повторная попытка ${retryCount + 1}/${CONFIG.MAX_RETRIES} для вакансии ${vacancyId}`
+					`Повторная попытка ${retryCount + 1}/${CONFIG.MAX_RETRIES} для вакансии ${vacancyId}`,
 				);
 				await Utils.delay(CONFIG.RETRY_DELAY);
 				return respondToVacancy(vacancyId, title, retryCount + 1);
@@ -1745,9 +1845,9 @@
 		try {
 			const res = await fetch(pageUrl, {
 				credentials: 'include',
-				headers: {
-					'User-Agent': navigator.userAgent,
-				},
+				headers: Utils.getHhApiHeaders(Utils.getXsrfToken(), {
+					accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+				}),
 				signal: controller.signal,
 			});
 
@@ -1760,38 +1860,52 @@
 			}
 
 			const text = await res.text();
-			const parser = new DOMParser();
-			const doc = parser.parseFromString(text, 'text/html');
+			let vacancies = Utils.parseVacanciesFromSearchPage(text);
 
-			// Fallback-механизмы поиска вакансий: множественные стратегии поиска элементов
-			// HH.ru часто меняет CSS-классы, поэтому используем каскадный поиск с запасными вариантами
-			let cards = doc.querySelectorAll('[data-qa="vacancy-serp__vacancy"]');
-			if (cards.length === 0) {
-				cards = doc.querySelectorAll('.vacancy-serp-item');
-			}
-			if (cards.length === 0) {
-				cards = Array.from(doc.querySelectorAll('[data-qa="serp-item__title"]'))
-					.map((link) => link.closest('[data-qa*="vacancy"]') || link.closest('.vacancy-serp-item'))
+			if (!vacancies || vacancies.length === 0) {
+				const parser = new DOMParser();
+				const doc = parser.parseFromString(text, 'text/html');
+
+				// Fallback-механизмы поиска вакансий: множественные стратегии поиска элементов
+				// HH.ru часто меняет CSS-классы, поэтому используем каскадный поиск с запасными вариантами
+				let cards = doc.querySelectorAll('[data-qa="vacancy-serp__vacancy"]');
+				if (cards.length === 0) {
+					cards = doc.querySelectorAll('.vacancy-serp-item');
+				}
+				if (cards.length === 0) {
+					cards = Array.from(doc.querySelectorAll('[data-qa="serp-item__title"]'))
+						.map(
+							(link) => link.closest('[data-qa*="vacancy"]') || link.closest('.vacancy-serp-item'),
+						)
+						.filter(Boolean);
+				}
+
+				if (cards.length === 0) {
+					console.log('🔚 Вакансии на странице не найдены. Завершаю обработку.');
+					return false;
+				}
+
+				vacancies = Array.from(cards)
+					.map((card) => extractVacancyData(card))
 					.filter(Boolean);
 			}
 
-			if (cards.length === 0) {
+			if (!vacancies || vacancies.length === 0) {
 				console.log('🔚 Вакансии на странице не найдены. Завершаю обработку.');
 				return false;
 			}
 
-			console.log(`📋 Найдено ${cards.length} вакансий на странице ${pageNum + 1}`);
+			console.log(`📋 Найдено ${vacancies.length} вакансий на странице ${pageNum + 1}`);
 
 			let processedOnPage = 0;
 			let successfulOnPage = 0;
 
-			for (let i = 0; i < cards.length; i++) {
-				const card = cards[i];
-
+			for (let i = 0; i < vacancies.length; i++) {
+				const vacancyData = vacancies[i];
 				// Проверяем условия остановки
 				if (!STATE.isRunning || STATE.responsesCount >= CONFIG.MAX_RESPONSES_PER_DAY) {
 					console.log(
-						`🛑 Остановка: isRunning=${STATE.isRunning}, responses=${STATE.responsesCount}/${CONFIG.MAX_RESPONSES_PER_DAY}`
+						`🛑 Остановка: isRunning=${STATE.isRunning}, responses=${STATE.responsesCount}/${CONFIG.MAX_RESPONSES_PER_DAY}`,
 					);
 					break;
 				}
@@ -1803,19 +1917,30 @@
 
 				if (!STATE.isRunning) break;
 
-				// Извлекаем данные вакансии
-				const vacancyData = extractVacancyData(card);
-				if (!vacancyData) {
-					console.log(`⚠️ Не удалось извлечь данные вакансии ${i + 1}`);
+				if (vacancyData.alreadyApplied) {
+					console.log(`⏭️ Пропускаю вакансию ${vacancyData.id}: уже откликались`);
+					STATE.totalSkipped++;
+					continue;
+				}
+
+				if (vacancyData.hasTest) {
+					console.log(`⏭️ Пропускаю вакансию ${vacancyData.id}: требуется тест`);
+					Logger.saveLog({
+						id: vacancyData.id,
+						title: vacancyData.title,
+						time: new Date().toISOString(),
+						success: false,
+						message: 'Требуется тест',
+					});
+					STATE.totalSkipped++;
 					continue;
 				}
 
 				console.log(
-					`🔍 Обрабатываю вакансию ${i + 1}/${cards.length}: ${vacancyData.title} (ID: ${
+					`🔍 Обрабатываю вакансию ${i + 1}/${vacancies.length}: ${vacancyData.title} (ID: ${
 						vacancyData.id
-					})`
+					})`,
 				);
-
 				STATE.totalProcessed++;
 				processedOnPage++;
 
@@ -1825,7 +1950,7 @@
 					// Сбрасываем счетчик дубликатов при пропуске по фильтрам
 					STATE.consecutiveDuplicates = 0;
 					console.log(
-						`⏭️ Пропускаю вакансию ${vacancyData.id}: ${filterResult.reasons.join(', ')}`
+						`⏭️ Пропускаю вакансию ${vacancyData.id}: ${filterResult.reasons.join(', ')}`,
 					);
 					Logger.saveLog({
 						id: vacancyData.id,
@@ -1851,7 +1976,7 @@
 				}
 
 				// Умная задержка между вакансиями с учетом consecutiveFailures
-				if (i < cards.length - 1) {
+				if (i < vacancies.length - 1) {
 					// Не делаем задержку после последней вакансии
 					let delay = Utils.getSmartDelay();
 					const smartDelay = delay;
@@ -1863,7 +1988,7 @@
 						const exponentialDelay = Math.pow(2, STATE.consecutiveFailures - 1) * 1000; // 1с, 2с, 4с, 8с...
 						delay = Math.max(delay, exponentialDelay);
 						console.log(
-							`⚠️ Задержка ${delay}мс (умная: ${smartDelay}мс, экспоненциальная: ${exponentialDelay}мс) из-за ${STATE.consecutiveFailures} подряд неудач`
+							`⚠️ Задержка ${delay}мс (умная: ${smartDelay}мс, экспоненциальная: ${exponentialDelay}мс) из-за ${STATE.consecutiveFailures} подряд неудач`,
 						);
 					} else {
 						console.log(`⏰ Умная задержка ${delay}мс`);
@@ -1877,7 +2002,7 @@
 			console.log(
 				`📊 Страница ${
 					pageNum + 1
-				} завершена: обработано ${processedOnPage}, отправлено ${successfulOnPage}`
+				} завершена: обработано ${processedOnPage}, отправлено ${successfulOnPage}`,
 			);
 
 			// Возвращаем true только если обработали хотя бы одну вакансию
@@ -1910,7 +2035,12 @@
 			link = card.querySelector('h3 a, .vacancy-serp-item__row_header a');
 		}
 
-		const title = link?.innerText?.trim();
+		const titleElement =
+			card.querySelector('[data-qa="serp-item__title-text"]') ||
+			card.querySelector('[data-qa="serp-item__title"]') ||
+			link;
+
+		const title = titleElement?.textContent?.trim() || link?.innerText?.trim();
 		const href = link?.href;
 
 		if (!title || !href) {
@@ -1925,16 +2055,27 @@
 		}
 
 		// Извлекаем дополнительную информацию
-		const salaryElement = card.querySelector('[data-qa="vacancy-serp__vacancy-compensation"]');
-		const salary = salaryElement?.innerText?.trim() || '';
+		const salaryElement =
+			card.querySelector('[data-qa="vacancy-serp__vacancy-compensation"]') ||
+			card.querySelector('[data-qa="compensation"]');
+		const salary = salaryElement?.textContent?.trim() || '';
 
-		const companyElement = card.querySelector('[data-qa="vacancy-serp__vacancy-employer"]');
-		const company = companyElement?.innerText?.trim() || '';
+		const companyElement =
+			card.querySelector('[data-qa="vacancy-serp__vacancy-employer"]') ||
+			card.querySelector('[data-qa="vacancy-serp__vacancy-employer-text"]');
+		const company = companyElement?.textContent?.trim() || '';
 
-		const descriptionElement = card.querySelector(
-			'[data-qa="vacancy-serp__vacancy_snippet_requirement"]'
+		const descriptionElement =
+			card.querySelector('[data-qa="vacancy-serp__vacancy_snippet_requirement"]') ||
+			card.querySelector('[data-qa="vacancy-serp__vacancy_snippet_responsibility"]');
+		const description = descriptionElement?.textContent?.trim() || '';
+
+		const hasTest = Boolean(card.querySelector('[data-qa="vacancy-serp__vacancy_test"]'));
+		const alreadyApplied = Boolean(
+			card.querySelector(
+				'[data-qa="vacancy-serp__vacancy_response"] [data-qa="vacancy-serp__vacancy-response-sent"]',
+			) || card.querySelector('[data-qa="vacancy-serp__vacancy-response-sent"]'),
 		);
-		const description = descriptionElement?.innerText?.trim() || '';
 
 		return {
 			id: vacancyId,
@@ -1943,6 +2084,8 @@
 			company,
 			description,
 			href,
+			hasTest,
+			alreadyApplied,
 		};
 	}
 
@@ -1982,7 +2125,7 @@
 				console.log(
 					`❌ Страница ${
 						pageNum + 1
-					} не обработана. Ошибок подряд: ${consecutiveErrors}, пустых страниц: ${consecutiveEmptyPages}`
+					} не обработана. Ошибок подряд: ${consecutiveErrors}, пустых страниц: ${consecutiveEmptyPages}`,
 				);
 
 				if (consecutiveErrors >= maxConsecutiveErrors) {
@@ -2022,7 +2165,7 @@
 		}
 
 		console.log(
-			`🏁 Обработка завершена. Всего страниц: ${pageNum}, откликов: ${STATE.responsesCount}`
+			`🏁 Обработка завершена. Всего страниц: ${pageNum}, откликов: ${STATE.responsesCount}`,
 		);
 
 		if (STATE.responsesCount >= CONFIG.MAX_RESPONSES_PER_DAY) {
@@ -2069,7 +2212,7 @@
 			'Завершено',
 			`Отправлено ${stats.totalSent} из ${stats.totalProcessed} вакансий`,
 			'info',
-			6000
+			6000,
 		);
 	}
 
@@ -2095,7 +2238,7 @@
 		UI.showNotification(
 			STATE.isPaused ? 'Приостановлено' : 'Продолжено',
 			STATE.isPaused ? 'Процесс приостановлен' : 'Процесс продолжен',
-			'info'
+			'info',
 		);
 	}
 
@@ -2112,7 +2255,7 @@
 				'Ошибка конфигурации',
 				'Не указан RESUME_HASH! Откройте настройки и укажите хеш резюме.',
 				'error',
-				8000
+				8000,
 			);
 			return;
 		}
@@ -2138,7 +2281,7 @@
 				'Лимит превышен',
 				`Сегодня уже отправлено ${sentToday} откликов. Дневной лимит: ${CONFIG.MAX_RESPONSES_PER_DAY}`,
 				'warning',
-				6000
+				6000,
 			);
 			return;
 		}
@@ -2197,7 +2340,7 @@
 			UI.showNotification(
 				'Внимание',
 				'На странице нет кнопки отклика. Возможно, вакансия уже закрыта или отклик уже отправлен.',
-				'warning'
+				'warning',
 			);
 			return;
 		}
@@ -2217,7 +2360,7 @@
 				'Лимит превышен',
 				`Сегодня уже отправлено ${sentToday} откликов. Дневной лимит: ${CONFIG.MAX_RESPONSES_PER_DAY}`,
 				'warning',
-				6000
+				6000,
 			);
 			return;
 		}
@@ -2654,7 +2797,7 @@
 
 	// ===== ИНИЦИАЛИЗАЦИЯ =====
 	function init() {
-		console.log('🚀 HH.ru Auto Responder v3.0 загружен');
+		console.log('🚀 HH.ru Auto Responder v1.1 загружен');
 
 		// Загружаем конфигурацию
 		Utils.loadConfig();
@@ -2709,13 +2852,13 @@
 		const stats = Utils.getFormattedStats();
 		if (stats.allTimeSent > 0) {
 			console.log(
-				`📊 Статистика: всего отправлено ${Utils.formatNumber(stats.allTimeSent)} откликов`
+				`📊 Статистика: всего отправлено ${Utils.formatNumber(stats.allTimeSent)} откликов`,
 			);
 			UI.showNotification(
 				'Добро пожаловать!',
 				`Всего отправлено ${Utils.formatNumber(stats.allTimeSent)} откликов`,
 				'info',
-				3000
+				3000,
 			);
 		}
 
@@ -2732,16 +2875,14 @@
 	async function autoFindResumeHash() {
 		const controller = new AbortController();
 		const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 секунд таймаут
+		const xsrf = Utils.getXsrfToken();
 
 		try {
 			console.log('🔍 Пытаюсь автоматически найти RESUME_HASH...');
 
 			const response = await fetch(CONFIG.RESUMES_API, {
 				credentials: 'include',
-				headers: {
-					Accept: 'application/json',
-					'User-Agent': navigator.userAgent,
-				},
+				headers: Utils.getHhApiHeaders(xsrf),
 				signal: controller.signal,
 			});
 
@@ -2749,15 +2890,38 @@
 
 			if (response.ok) {
 				const data = await response.json();
-				if (data.items && data.items.length > 0) {
-					const firstResume = data.items[0];
-					if (firstResume.hash) {
-						console.log('✅ Автоматически найден RESUME_HASH:', firstResume.hash);
-						CONFIG.RESUME_HASH = firstResume.hash;
+				const resumes = data.items || data.resumes || data.resume || [];
+
+				if (resumes.length > 0) {
+					const firstResume = resumes[0];
+					const resumeHash = firstResume.hash || firstResume.resumeHash || firstResume.id;
+					if (resumeHash) {
+						console.log('✅ Автоматически найден RESUME_HASH:', resumeHash);
+						CONFIG.RESUME_HASH = resumeHash;
 						Utils.saveConfig();
 						UI.showNotification('Успех!', 'RESUME_HASH найден автоматически', 'success');
 						return;
 					}
+				}
+			}
+
+			const pageResponse = await fetch(CONFIG.RESUMES_PAGE_API, {
+				credentials: 'include',
+				headers: Utils.getHhApiHeaders(xsrf, {
+					accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+				}),
+				signal: controller.signal,
+			});
+
+			if (pageResponse.ok) {
+				const pageText = await pageResponse.text();
+				const latestResumeMatch = pageText.match(/"latestResumeHash":"([a-f0-9]+)"/);
+				if (latestResumeMatch) {
+					console.log('✅ Автоматически найден RESUME_HASH:', latestResumeMatch[1]);
+					CONFIG.RESUME_HASH = latestResumeMatch[1];
+					Utils.saveConfig();
+					UI.showNotification('Успех!', 'RESUME_HASH найден автоматически', 'success');
+					return;
 				}
 			}
 
@@ -2766,7 +2930,7 @@
 				'Требуется настройка',
 				'Не удалось найти RESUME_HASH автоматически. Откройте настройки.',
 				'warning',
-				6000
+				6000,
 			);
 		} catch (error) {
 			clearTimeout(timeoutId);
