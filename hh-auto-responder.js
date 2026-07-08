@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name           HH.ru Custom Script
 // @namespace      http://tampermonkey.net/
-// @version        1.1
+// @version        1.2
 // @description    Автооткликер на HeadHunter
 // @author         Genzor
 // @match          https://hh.ru/*
@@ -278,11 +278,29 @@
 		},
 
 		parseVacanciesFromSearchPage: (html) => {
-			const marker = ',"vacancies":';
-			const markerIndex = html.indexOf(marker);
-			if (markerIndex === -1) return null;
+			const markers = [
+				'"vacancySearchResult":{"vacancies":',
+				'"vacancySearchResult": {"vacancies":',
+				'vacancySearchResult":{"vacancies":',
+			];
 
-			const jsonStart = html.indexOf('[', markerIndex);
+			let markerIndex = -1;
+			let marker = '';
+
+			for (const candidate of markers) {
+				const idx = html.indexOf(candidate);
+				if (idx !== -1) {
+					markerIndex = idx;
+					marker = candidate;
+					break;
+				}
+			}
+
+			if (markerIndex === -1) {
+				return null;
+			}
+
+			const jsonStart = html.indexOf('[', markerIndex + marker.length - 1);
 			if (jsonStart === -1) return null;
 
 			let depth = 0;
@@ -336,29 +354,114 @@
 			try {
 				const urlObj = new URL(url);
 
-				// Если это главная страница, добавляем базовый поиск
-				if (urlObj.pathname === '/' || urlObj.pathname === '') {
-					return 'https://hh.ru/search/vacancy?text=&search_field=name&area=113&experience=doesNotMatter&order_by=publication_time&search_period=1&items_on_page=20';
-				}
-
-				// Если это не страница поиска, добавляем параметры поиска
-				if (!urlObj.pathname.includes('/search/vacancy')) {
-					urlObj.pathname = '/search/vacancy';
-					if (!urlObj.search) {
-						urlObj.search =
-							'?text=&search_field=name&area=113&experience=doesNotMatter&order_by=publication_time&search_period=1&items_on_page=20';
+				const employerMatch = urlObj.pathname.match(/\/employer\/(\d+)/);
+				if (employerMatch) {
+					const searchUrl = new URL('/search/vacancy', urlObj.origin);
+					searchUrl.searchParams.set('employer_id', employerMatch[1]);
+					if (!searchUrl.searchParams.has('items_on_page')) {
+						searchUrl.searchParams.set('items_on_page', '20');
 					}
+					return searchUrl.toString();
 				}
 
-				// Убеждаемся, что есть items_on_page
+				if (urlObj.pathname === '/' || urlObj.pathname === '') {
+					return null;
+				}
+
+				if (!urlObj.pathname.includes('/search/vacancy')) {
+					return null;
+				}
+
 				if (!urlObj.searchParams.has('items_on_page')) {
 					urlObj.searchParams.set('items_on_page', '20');
 				}
 
 				return urlObj.toString();
 			} catch {
-				return url;
+				return null;
 			}
+		},
+
+		getSearchSignature: (url) => {
+			try {
+				const urlObj = new URL(url);
+				if (!urlObj.pathname.includes('/search/vacancy')) return '';
+
+				const params = new URLSearchParams(urlObj.search);
+				params.delete('page');
+				params.delete('hhtmFrom');
+				params.delete('hhtmFromLabel');
+				params.delete('hhtmSource');
+				params.delete('hhtmSourceLabel');
+				return params.toString();
+			} catch {
+				return '';
+			}
+		},
+
+		resolveProcessUrl: (inputUrl = '') => {
+			const pageType = Utils.detectPageType();
+			const trimmedInput = inputUrl.trim();
+			const currentUrl = window.location.href;
+
+			if (pageType === 'vacancy') {
+				return currentUrl;
+			}
+
+			if (pageType === 'search') {
+				if (!trimmedInput) {
+					return currentUrl;
+				}
+
+				const currentSignature = Utils.getSearchSignature(currentUrl);
+				const inputSignature = Utils.getSearchSignature(trimmedInput);
+
+				if (currentSignature && inputSignature && currentSignature !== inputSignature) {
+					console.warn(
+						'⚠️ URL в поле не совпадает с текущим поиском. Использую текущую страницу:',
+						currentUrl,
+					);
+					UI.showNotification(
+						'Используется текущий поиск',
+						'URL в поле отличается от открытой страницы — беру текущие фильтры',
+						'warning',
+						5000,
+					);
+					return currentUrl;
+				}
+
+				return trimmedInput;
+			}
+
+			if (pageType === 'employer') {
+				return trimmedInput || currentUrl;
+			}
+
+			if (!trimmedInput) {
+				return null;
+			}
+
+			return trimmedInput;
+		},
+
+		prepareProcessUrl: (url) => {
+			const normalized = Utils.normalizeUrl(url);
+			if (!normalized) {
+				return {
+					url: null,
+					error:
+						'Нужна ссылка на поиск вакансий с фильтрами. Откройте hh.ru/search/vacancy?... и запустите оттуда.',
+				};
+			}
+
+			if (!normalized.includes('/search/vacancy')) {
+				return {
+					url: null,
+					error: 'Поддерживаются только страницы поиска вакансий (/search/vacancy).',
+				};
+			}
+
+			return { url: normalized, error: null };
 		},
 
 		formatTime: (ms) => {
@@ -1754,6 +1857,17 @@
 						STATE.currentVacancy = null; // Сбрасываем текущую вакансию после обработки Already applied
 					}
 					return;
+				} else if (res.status === 403 || res.status === 429 || errorCode === 'forbidden') {
+					Logger.saveLog({
+						id: vacancyId,
+						title,
+						time: new Date().toISOString(),
+						success: false,
+						message: res.status === 403 ? 'Доступ запрещён (403)' : `HTTP ${res.status}`,
+					});
+					STATE.totalSkipped++;
+					STATE.currentVacancy = null;
+					return;
 				} else if (retryCount < CONFIG.MAX_RETRIES) {
 					// Логика повторных попыток: при сетевых ошибках делаем повторные попытки с фиксированной задержкой
 					// Это fallback-механизм для временных проблем с сетью или сервером
@@ -1825,7 +1939,13 @@
 
 	// ===== ОБРАБОТКА СТРАНИЦ =====
 	async function processPage(url, pageNum) {
-		let pageUrl = Utils.normalizeUrl(url);
+		const prepared = Utils.prepareProcessUrl(url);
+		if (!prepared.url) {
+			console.error(`❌ Некорректный URL для обработки: ${prepared.error}`);
+			return false;
+		}
+
+		let pageUrl = prepared.url;
 
 		// Правильно добавляем параметр page, не ломая существующие параметры
 		try {
@@ -2005,8 +2125,8 @@
 				} завершена: обработано ${processedOnPage}, отправлено ${successfulOnPage}`,
 			);
 
-			// Возвращаем true только если обработали хотя бы одну вакансию
-			return processedOnPage > 0;
+			// Возвращаем true если на странице были вакансии (даже если все пропущены)
+			return vacancies.length > 0;
 		} catch (err) {
 			clearTimeout(timeoutId);
 
@@ -2263,16 +2383,19 @@
 		// Определяем тип страницы
 		const pageType = Utils.detectPageType();
 
-		// Для главной страницы - нормализуем URL для обработки вакансий
-		if (pageType === 'home') {
-			url = Utils.normalizeUrl(url);
-		}
-
 		// Для страницы вакансии - одиночный отклик
 		if (pageType === 'vacancy') {
 			startSingleVacancyProcess();
 			return;
 		}
+
+		const prepared = Utils.prepareProcessUrl(url);
+		if (!prepared.url) {
+			UI.showNotification('Ошибка', prepared.error, 'error', 8000);
+			return;
+		}
+
+		url = prepared.url;
 
 		// Проверяем дневной лимит
 		const sentToday = Responses.getSentToday();
@@ -2288,6 +2411,7 @@
 
 		console.log('✅ Начинаю обработку вакансий...');
 		console.log('🔍 URL для обработки:', url);
+		console.log(`🎛️ Фильтры скрипта: ${STATE.settings.enableFilters ? 'включены' : 'выключены'}`);
 
 		// Сброс состояния
 		STATE.responsesCount = 0;
@@ -2320,7 +2444,7 @@
 		// Показываем модальное окно
 		UI.openModal();
 
-		UI.showNotification('Запущено', 'Начинаю отправку откликов', 'success');
+		UI.showNotification('Запущено', 'Начинаю отправку откликов по текущему поиску', 'success');
 		processAllPages(url);
 	}
 
@@ -2469,23 +2593,29 @@
 
 		createUrlInput: () => {
 			const pageType = Utils.detectPageType();
-			let placeholder = 'Вставьте ссылку с HH.ru или оставьте пустым для общего поиска';
+			let placeholder = 'Откройте поиск с фильтрами и запустите оттуда';
 			let isDisabled = false;
+			let defaultValue = '';
 
 			if (pageType === 'vacancy') {
 				const vacancyData = Utils.getCurrentVacancyData();
 				if (vacancyData) {
 					placeholder = `Текущая вакансия: ${vacancyData.title}`;
 					isDisabled = true;
+					defaultValue = window.location.href;
 				} else {
 					placeholder = 'Не удалось определить вакансию на странице';
 					isDisabled = true;
+					defaultValue = window.location.href;
 				}
 			} else if (pageType === 'search') {
-				placeholder = 'Оставьте пустым для обработки текущего поиска или вставьте другую ссылку';
+				placeholder = 'По умолчанию используется текущий поиск. Можно вставить другую ссылку.';
+				defaultValue = window.location.href;
 			} else if (pageType === 'employer') {
-				placeholder =
-					'Оставьте пустым для обработки вакансий работодателя или вставьте другую ссылку';
+				placeholder = 'По умолчанию вакансии этого работодателя. Можно вставить другую ссылку.';
+				defaultValue = window.location.href;
+			} else {
+				placeholder = 'Вставьте ссылку на поиск: hh.ru/search/vacancy?...';
 			}
 
 			const input = document.createElement('input');
@@ -2532,15 +2662,12 @@
 
 				input.oninput = saveUrl;
 
-				// Загружаем сохраненный URL
-				const storedUrl = localStorage.getItem(CONFIG.FILTER_URL_KEY);
-				if (storedUrl) {
-					input.value = storedUrl;
+				input.value = defaultValue;
+				if (defaultValue) {
 					input.style.borderColor = '#10b981';
 				}
 			} else {
-				// Для disabled поля показываем текущий URL
-				input.value = window.location.href;
+				input.value = defaultValue || window.location.href;
 				input.style.borderColor = '#10b981';
 			}
 
@@ -2550,7 +2677,7 @@
 		createMainButton: () => {
 			const pageType = Utils.detectPageType();
 			let buttonText = '📤 Отправить отклики';
-			let buttonHint = 'Оставьте поле пустым для общего поиска или вставьте ссылку с HH.ru';
+			let buttonHint = 'Запустите со страницы поиска с нужными фильтрами';
 
 			if (pageType === 'vacancy') {
 				const vacancyData = Utils.getCurrentVacancyData();
@@ -2569,7 +2696,7 @@
 				buttonHint = 'Обработать вакансии этого работодателя';
 			} else {
 				buttonText = '📤 Отправить отклики';
-				buttonHint = 'Оставьте поле пустым для общего поиска или вставьте ссылку с HH.ru';
+				buttonHint = 'Вставьте ссылку на поиск вакансий';
 			}
 
 			const btn = document.createElement('button');
@@ -2611,21 +2738,25 @@
 					return;
 				}
 
+				const currentPageType = Utils.detectPageType();
+
 				// Для страницы вакансии не проверяем URL
-				if (pageType === 'vacancy') {
+				if (currentPageType === 'vacancy') {
 					startProcess(window.location.href);
 					return;
 				}
 
-				let url = document.getElementById('hh-api-filter-url').value.trim();
+				const inputEl = document.getElementById('hh-api-filter-url');
+				const url = Utils.resolveProcessUrl(inputEl?.value || '');
 
-				// Если URL пустой, используем текущий URL или базовый поиск
 				if (!url) {
-					if (pageType === 'search' || pageType === 'employer') {
-						url = window.location.href;
-					} else {
-						url = 'https://hh.ru/search/vacancy';
-					}
+					UI.showNotification(
+						'Ошибка',
+						'Откройте страницу поиска с нужными фильтрами (hh.ru/search/vacancy?...) и запустите оттуда',
+						'error',
+						8000,
+					);
+					return;
 				}
 
 				if (!Utils.validateUrl(url)) {
@@ -2797,7 +2928,7 @@
 
 	// ===== ИНИЦИАЛИЗАЦИЯ =====
 	function init() {
-		console.log('🚀 HH.ru Auto Responder v1.1 загружен');
+		console.log('🚀 HH.ru Auto Responder v1.2 загружен');
 
 		// Загружаем конфигурацию
 		Utils.loadConfig();
