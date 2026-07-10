@@ -72,7 +72,7 @@
 		pauseTime: null,
 		totalPauseTime: 0,
 		uiCollapsed: false,
-		modalVisible: true,
+		modalVisible: false,
 		modalTab: 'responses',
 		settingsTab: 'general',
 		currentVacancy: null,
@@ -2148,9 +2148,59 @@
 
 			if (!list) return;
 
+			// При открытии без новой записи — подтягиваем историю из логов
+			try {
+				if (!entry && list.children.length === 0) {
+					const logs = Logger.getLogs().slice(-15).reverse();
+					logs.forEach((logEntry) => {
+						const li = document.createElement('li');
+						li.className = 'log-item';
+
+						const symbolSpan = document.createElement('span');
+						symbolSpan.className = 'log-symbol';
+						symbolSpan.textContent = logEntry.success ? '✅' : '❌';
+
+						const a = document.createElement('a');
+						a.className = 'log-link';
+						a.href = Utils.resolveVacancyUrl(logEntry.id);
+						a.textContent = logEntry.title + (logEntry.message ? ` (${logEntry.message})` : '');
+						a.target = '_blank';
+
+						const timeSpan = document.createElement('span');
+						timeSpan.className = 'log-time';
+						timeSpan.textContent = new Date(logEntry.time).toLocaleTimeString();
+
+						li.appendChild(symbolSpan);
+						li.appendChild(a);
+						li.appendChild(timeSpan);
+						list.appendChild(li);
+					});
+
+					if (logs.length === 0) {
+						const empty = document.createElement('li');
+						empty.className = 'log-item';
+						empty.style.cssText = 'justify-content:center;color:#94a3b8;';
+						empty.textContent = 'Пока нет откликов — история появится после запуска';
+						list.appendChild(empty);
+					}
+				}
+			} catch (error) {
+				console.error('Ошибка загрузки истории логов:', error);
+			}
+
 			// Добавляем новую запись
 			try {
 				if (entry) {
+					// Убираем пустой плейсхолдер, если был
+					const placeholder = list.querySelector('.log-item');
+					if (
+						placeholder &&
+						list.children.length === 1 &&
+						!placeholder.querySelector('.log-link')
+					) {
+						list.innerHTML = '';
+					}
+
 					const li = document.createElement('li');
 					li.className = 'log-item';
 
@@ -2304,23 +2354,28 @@
 		},
 
 		switchModal: () => {
-			const modal = document.getElementById('hh-api-modal');
-			if (modal) {
-				STATE.modalVisible = !STATE.modalVisible;
-				modal.style.display = STATE.modalVisible ? 'flex' : 'none';
-				if (STATE.modalVisible) {
-					UI.updateModal();
-				}
+			let modal = document.getElementById('hh-api-modal');
+			if (!modal) {
+				STATE.modalVisible = true;
+				UI.updateModal();
+				UI.updateManualTab();
+				return;
+			}
+
+			STATE.modalVisible = !STATE.modalVisible;
+			modal.style.display = STATE.modalVisible ? 'flex' : 'none';
+			if (STATE.modalVisible) {
+				UI.updateModal();
+				UI.updateManualTab();
 			}
 		},
 
 		openModal: () => {
 			STATE.modalVisible = true;
+			UI.updateModal();
+			UI.updateManualTab();
 			const modal = document.getElementById('hh-api-modal');
-			if (modal) {
-				modal.style.display = 'flex';
-				UI.updateModal();
-			}
+			if (modal) modal.style.display = 'flex';
 		},
 
 		toggleUI: () => {
