@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name           HH.ru Custom Script
 // @namespace      http://tampermonkey.net/
-// @version        2.1
-// @description    Автооткликер на HeadHunter — поиски, лимиты, шаблоны писем
+// @version        2.2
+// @description    Автооткликер на HeadHunter — поиски, письма, экспорт настроек
 // @author         Genzor
 // @match          https://hh.ru/*
 // @match          https://*.hh.ru/*
@@ -652,7 +652,10 @@
 
 		saveConfig: () => {
 			if (!STATE.settings.autoSaveConfig) return;
+			Utils.forceSaveConfig();
+		},
 
+		forceSaveConfig: () => {
 			const configToSave = {
 				...CONFIG,
 				settings: STATE.settings,
@@ -673,6 +676,26 @@
 			} catch (error) {
 				console.error('Ошибка загрузки конфигурации:', error);
 			}
+		},
+
+		safeParseJson: (raw, fallback) => {
+			try {
+				return JSON.parse(raw);
+			} catch {
+				return fallback;
+			}
+		},
+
+		downloadJson: (filename, data) => {
+			const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+			const url = URL.createObjectURL(blob);
+			const link = document.createElement('a');
+			link.href = url;
+			link.download = filename;
+			document.body.appendChild(link);
+			link.click();
+			link.remove();
+			setTimeout(() => URL.revokeObjectURL(url), 1000);
 		},
 
 		debounce: (func, wait) => {
@@ -1268,6 +1291,156 @@
 
 			const legacy = (CONFIG.COVER_LETTER_TEMPLATE || '').trim();
 			CoverLetters.add('Основное', legacy || DEFAULT_COVER_LETTER);
+		},
+	};
+
+	const Backup = {
+		TYPE: 'hh-auto-responder-backup',
+		VERSION: 1,
+
+		CONFIG_FIELDS: [
+			'RESUME_HASH',
+			'COVER_LETTER_TEMPLATE',
+			'MAX_RESPONSES_PER_DAY',
+			'MAX_RESPONSES_PER_SESSION',
+			'DELAY_BETWEEN_RESPONSES',
+			'DELAY_BETWEEN_PAGES',
+			'MAX_RETRIES',
+			'RETRY_DELAY',
+			'MIN_SALARY',
+			'MAX_SALARY',
+			'SKIP_WITHOUT_SALARY',
+			'BLACKLIST_COMPANIES',
+			'REQUIRED_KEYWORDS',
+			'EXCLUDED_KEYWORDS',
+		],
+
+		pickConfig: () => {
+			const result = {};
+			Backup.CONFIG_FIELDS.forEach((key) => {
+				if (CONFIG[key] !== undefined) result[key] = CONFIG[key];
+			});
+			return result;
+		},
+
+		buildPayload: (includeHistory = false) => {
+			CoverLetters.syncActiveToConfig();
+			const payload = {
+				type: Backup.TYPE,
+				version: Backup.VERSION,
+				exportedAt: new Date().toISOString(),
+				config: Backup.pickConfig(),
+				settings: { ...STATE.settings },
+				savedSearches: SavedSearches.getCustom(),
+				selectedSearchId: SavedSearches.getSelectedId(),
+				coverLetters: CoverLetters.getAll(),
+				selectedLetterId: CoverLetters.getSelectedId(),
+			};
+
+			if (includeHistory) {
+				payload.history = {
+					manualQueue: ManualQueue.getAll(),
+					sentResponses: Utils.safeParseJson(
+						localStorage.getItem(CONFIG.SENT_RESPONSES_KEY) || '[]',
+						[],
+					),
+					stats: Logger.getStats(),
+					logs: Logger.getLogs(),
+				};
+			}
+
+			return payload;
+		},
+
+		exportToFile: (includeHistory = false) => {
+			const payload = Backup.buildPayload(includeHistory);
+			const stamp = new Date().toISOString().slice(0, 10);
+			Utils.downloadJson(`hh-auto-responder-backup-${stamp}.json`, payload);
+			return payload;
+		},
+
+		validate: (data) => {
+			if (!data || typeof data !== 'object') return 'Файл пустой или повреждён';
+			if (data.type && data.type !== Backup.TYPE) {
+				return 'Это не бэкап HH Auto Responder';
+			}
+			if (!data.config && !data.settings && !data.savedSearches && !data.coverLetters) {
+				return 'В файле нет данных для импорта';
+			}
+			return null;
+		},
+
+		apply: (data) => {
+			const error = Backup.validate(data);
+			if (error) return { ok: false, error };
+
+			if (data.config && typeof data.config === 'object') {
+				Backup.CONFIG_FIELDS.forEach((key) => {
+					if (data.config[key] !== undefined) CONFIG[key] = data.config[key];
+				});
+			}
+
+			if (data.settings && typeof data.settings === 'object') {
+				Object.assign(STATE.settings, data.settings);
+			}
+
+			if (Array.isArray(data.savedSearches)) {
+				SavedSearches.saveCustom(data.savedSearches);
+			}
+			if (typeof data.selectedSearchId === 'string') {
+				SavedSearches.setSelectedId(data.selectedSearchId);
+			}
+
+			if (Array.isArray(data.coverLetters)) {
+				CoverLetters.saveAll(data.coverLetters);
+				CoverLetters.ensureMigrated();
+			}
+			if (
+				typeof data.selectedLetterId === 'string' &&
+				CoverLetters.findById(data.selectedLetterId)
+			) {
+				CoverLetters.setSelectedId(data.selectedLetterId);
+			} else {
+				CoverLetters.syncActiveToConfig();
+			}
+
+			if (data.history && typeof data.history === 'object') {
+				if (Array.isArray(data.history.manualQueue)) {
+					ManualQueue.save(data.history.manualQueue);
+				}
+				if (Array.isArray(data.history.sentResponses)) {
+					localStorage.setItem(
+						CONFIG.SENT_RESPONSES_KEY,
+						JSON.stringify(data.history.sentResponses),
+					);
+				}
+				if (data.history.stats && typeof data.history.stats === 'object') {
+					localStorage.setItem(CONFIG.STATS_KEY, JSON.stringify(data.history.stats));
+				}
+				if (Array.isArray(data.history.logs)) {
+					localStorage.setItem(CONFIG.LOG_KEY, JSON.stringify(data.history.logs));
+				}
+			}
+
+			Utils.forceSaveConfig();
+			Utils.syncApiEndpoints();
+			return { ok: true };
+		},
+
+		refreshUiAfterImport: () => {
+			const settingsPanel = document.getElementById('hh-settings-panel');
+			const wasVisible = STATE.settingsVisible;
+			const tab = STATE.settingsTab;
+			if (settingsPanel) settingsPanel.remove();
+
+			UIBuilder.createMainInterface();
+			if (wasVisible) {
+				STATE.settingsVisible = true;
+				STATE.settingsTab = tab || 'general';
+				UI.createSettingsPanel();
+				UI.refreshSavedSearchesSettings();
+				UI.switchSettingsTab(STATE.settingsTab);
+			}
 		},
 	};
 
@@ -2036,6 +2209,23 @@
 								<p style="margin:0;font-size:13px;color:#64748b;line-height:1.5;">Если случайный режим выключен — используется выбранный шаблон. Включите, чтобы чередовать письма из списка.</p>
 							</div>
 						</div>
+
+						<!-- Экспорт / импорт -->
+						<div>
+							<h3 style="margin: 0 0 16px 0; font-size: 18px; font-weight: 600; color: #374151;">Резервная копия</h3>
+							<div style="display: grid; gap: 12px;">
+								<p style="margin:0;font-size:13px;color:#64748b;line-height:1.5;">Сохраните настройки, поиски и письма в JSON — или восстановите их на другом браузере.</p>
+								<label class="hh-check-row" for="setting-backup-history">
+									<input type="checkbox" id="setting-backup-history">
+									<span>Включить историю и статистику в экспорт</span>
+								</label>
+								<div style="display:flex;gap:8px;flex-wrap:wrap;">
+									<button type="button" id="setting-backup-export" class="hh-btn-ghost" style="flex:1;">⬇ Экспорт JSON</button>
+									<button type="button" id="setting-backup-import" class="hh-btn-ghost" style="flex:1;">⬆ Импорт JSON</button>
+								</div>
+								<input type="file" id="setting-backup-file" accept="application/json,.json" style="display:none;">
+							</div>
+						</div>
 					</div>
 
 					<div id="hh-settings-tab-filters" class="hh-settings-tab-panel" style="display:${STATE.settingsTab === 'filters' ? 'grid' : 'none'}; gap: 24px; min-width: 0; max-width: 100%;">
@@ -2226,6 +2416,47 @@
 				CONFIG.RESUME_HASH = panel.querySelector('#setting-resume-hash').value;
 				Utils.saveConfig();
 			};
+
+			panel.querySelector('#setting-backup-export').onclick = () => {
+				UI.persistActiveLetterFromSettings(panel);
+				const includeHistory = !!panel.querySelector('#setting-backup-history')?.checked;
+				Backup.exportToFile(includeHistory);
+				UI.showNotification(
+					'Экспорт',
+					includeHistory ? 'Бэкап с историей скачан' : 'Бэкап настроек скачан',
+					'success',
+				);
+			};
+
+			const importBtn = panel.querySelector('#setting-backup-import');
+			const importFile = panel.querySelector('#setting-backup-file');
+			if (importBtn && importFile) {
+				importBtn.onclick = () => importFile.click();
+				importFile.onchange = async () => {
+					const file = importFile.files?.[0];
+					importFile.value = '';
+					if (!file) return;
+
+					if (!confirm('Импорт заменит текущие настройки, поиски и письма. Продолжить?')) {
+						return;
+					}
+
+					try {
+						const text = await file.text();
+						const data = JSON.parse(text);
+						const result = Backup.apply(data);
+						if (!result.ok) {
+							UI.showNotification('Ошибка импорта', result.error, 'error');
+							return;
+						}
+						Backup.refreshUiAfterImport();
+						UI.showNotification('Импорт', 'Данные успешно восстановлены', 'success');
+					} catch (error) {
+						console.error(error);
+						UI.showNotification('Ошибка импорта', 'Не удалось прочитать JSON-файл', 'error');
+					}
+				};
+			}
 
 			panel.querySelector('#settings-save').onclick = () => {
 				UI.saveSettings();
@@ -4353,7 +4584,7 @@
 	// ===== ИНИЦИАЛИЗАЦИЯ =====
 	function init() {
 		Utils.syncApiEndpoints();
-		console.log('🚀 HH.ru Auto Responder v2.1 загружен');
+		console.log('🚀 HH.ru Auto Responder v2.2 загружен');
 
 		// Загружаем конфигурацию
 		Utils.loadConfig();
