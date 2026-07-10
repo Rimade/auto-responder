@@ -1926,11 +1926,12 @@
 			UIBuilder.injectPanelStyles();
 			let panel = document.getElementById('hh-settings-panel');
 			if (panel) {
-				panel.style.display = STATE.settingsVisible ? 'block' : 'none';
+				panel.style.display = STATE.settingsVisible ? 'flex' : 'none';
 				if (STATE.settingsVisible) {
 					UI.refreshSavedSearchesSettings();
 					UI.refreshLetterSettings(panel);
 					UI.switchSettingsTab(STATE.settingsTab || 'general');
+					UI.bindSettingsEscape();
 				}
 				return panel;
 			}
@@ -1945,24 +1946,28 @@
 				width: 600px;
 				max-width: 90vw;
 				max-height: 80vh;
-				overflow-x: hidden;
-				overflow-y: auto;
+				display: ${STATE.settingsVisible ? 'flex' : 'none'};
+				flex-direction: column;
+				overflow: hidden;
 				box-sizing: border-box;
 				background: white;
 				border-radius: 20px;
 				box-shadow: 0 25px 80px rgba(0, 0, 0, 0.2);
 				z-index: 10005;
 				font-family: system-ui, -apple-system, sans-serif;
-				display: ${STATE.settingsVisible ? 'block' : 'none'};
 			`;
 
 			panel.innerHTML = `
-				<div style="padding: 32px; position: relative; overflow-x: hidden; box-sizing: border-box; max-width: 100%;">
-					<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-						<h2 style="margin: 0; font-size: 24px; font-weight: 700; color: #1e293b;">⚙️ Настройки</h2>
-					</div>
-					<button id="settings-close" style="position: absolute; top: 20px; right: 20px; background: rgba(255, 255, 255, 0.95); border: 1px solid #e5e7eb; font-size: 28px; cursor: pointer; color: #64748b; padding: 8px; border-radius: 8px; z-index: 10006; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);">×</button>
+				<div class="hh-settings-header">
+					<h2 class="hh-settings-title">⚙️ Настройки</h2>
+					<button type="button" id="settings-close" class="hh-settings-close" title="Закрыть (Esc)" aria-label="Закрыть">
+						<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true">
+							<path d="M18 6L6 18M6 6l12 12"/>
+						</svg>
+					</button>
+				</div>
 
+				<div class="hh-settings-body">
 					<div class="hh-settings-tabs" role="tablist">
 						<button type="button" class="hh-settings-tab ${STATE.settingsTab === 'general' ? 'active' : ''}" data-settings-tab="general" role="tab">Основные</button>
 						<button type="button" class="hh-settings-tab ${STATE.settingsTab === 'filters' ? 'active' : ''}" data-settings-tab="filters" role="tab">Фильтры</button>
@@ -2084,25 +2089,23 @@
 							</div>
 						</div>
 					</div>
+				</div>
 
-					<!-- Кнопки -->
-					<div style="display: flex; gap: 12px; justify-content: flex-end; margin-top: 24px;">
-						<button id="settings-reset" style="padding: 12px 24px; background: #6b7280; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500;">Сбросить</button>
-						<button id="settings-save" style="padding: 12px 24px; background: #2563eb; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500;">Сохранить</button>
-					</div>
+				<div class="hh-settings-footer">
+					<button type="button" id="settings-reset" class="hh-settings-btn hh-settings-btn-muted">Сбросить</button>
+					<button type="button" id="settings-save" class="hh-settings-btn hh-settings-btn-primary">Сохранить</button>
 				</div>
 			`;
 
 			// Обработчики событий
 			const settingsCloseBtn = panel.querySelector('#settings-close');
-			settingsCloseBtn.onclick = () => {
-				STATE.settingsVisible = false;
-				panel.style.display = 'none';
-			};
+			settingsCloseBtn.onclick = () => UI.closeSettings(true);
 
 			panel.querySelectorAll('[data-settings-tab]').forEach((tab) => {
 				tab.onclick = () => UI.switchSettingsTab(tab.dataset.settingsTab);
 			});
+
+			UI.bindSettingsEscape();
 
 			panel.querySelector('#setting-notifications').onchange = () => {
 				STATE.settings.showNotifications = panel.querySelector('#setting-notifications').checked;
@@ -2477,6 +2480,32 @@
 			panel.style.display = 'none';
 		},
 
+		closeSettings: (save = false) => {
+			const panel = document.getElementById('hh-settings-panel');
+			if (!panel || !STATE.settingsVisible) return;
+
+			if (save) {
+				UI.saveSettings();
+				UI.showNotification('Сохранено', 'Настройки сохранены', 'success', 2000);
+				return;
+			}
+
+			STATE.settingsVisible = false;
+			panel.style.display = 'none';
+		},
+
+		bindSettingsEscape: () => {
+			if (UI._settingsEscapeBound) return;
+			UI._settingsEscapeBound = true;
+			document.addEventListener('keydown', (event) => {
+				if (event.key !== 'Escape' && event.code !== 'Escape') return;
+				if (!STATE.settingsVisible) return;
+				event.preventDefault();
+				event.stopPropagation();
+				UI.closeSettings(true);
+			});
+		},
+
 		resetSettings: () => {
 			// Сброс к значениям по умолчанию
 			Object.assign(STATE.settings, {
@@ -2525,6 +2554,7 @@
 			UI.createSettingsPanel();
 			UI.refreshSavedSearchesSettings();
 			UI.switchSettingsTab(STATE.settingsTab || 'general');
+			UI.bindSettingsEscape();
 		},
 
 		switchSettingsTab: (tabName) => {
@@ -2547,8 +2577,12 @@
 			const panel = document.getElementById('hh-settings-panel');
 			if (panel) {
 				STATE.settingsVisible = !STATE.settingsVisible;
-				panel.style.display = STATE.settingsVisible ? 'block' : 'none';
-				if (STATE.settingsVisible) UI.refreshSavedSearchesSettings();
+				panel.style.display = STATE.settingsVisible ? 'flex' : 'none';
+				if (STATE.settingsVisible) {
+					UI.refreshSavedSearchesSettings();
+					UI.refreshLetterSettings(panel);
+					UI.bindSettingsEscape();
+				}
 			} else {
 				STATE.settingsVisible = true;
 				UI.createSettingsPanel();
@@ -3867,6 +3901,77 @@
 					width: 100%;
 					max-width: 100%;
 				}
+				.hh-settings-header {
+					display: flex;
+					align-items: center;
+					justify-content: space-between;
+					gap: 16px;
+					flex-shrink: 0;
+					padding: 20px 24px 16px;
+					border-bottom: 1px solid #eef2f7;
+					background: rgba(255,255,255,0.96);
+					backdrop-filter: blur(8px);
+				}
+				.hh-settings-title {
+					margin: 0;
+					font-size: 22px;
+					font-weight: 700;
+					color: #1e293b;
+				}
+				.hh-settings-close {
+					display: inline-flex;
+					align-items: center;
+					justify-content: center;
+					width: 40px;
+					height: 40px;
+					padding: 0;
+					border: 1px solid #e2e8f0;
+					border-radius: 12px;
+					background: #f8fafc;
+					color: #64748b;
+					cursor: pointer;
+					flex-shrink: 0;
+					transition: background .15s ease, border-color .15s ease, color .15s ease, transform .15s ease;
+				}
+				.hh-settings-close:hover {
+					background: #fee2e2;
+					border-color: #fecaca;
+					color: #dc2626;
+				}
+				.hh-settings-close:active {
+					transform: scale(0.96);
+				}
+				.hh-settings-body {
+					flex: 1;
+					min-height: 0;
+					overflow-x: hidden;
+					overflow-y: auto;
+					padding: 20px 24px;
+					box-sizing: border-box;
+				}
+				.hh-settings-footer {
+					display: flex;
+					gap: 12px;
+					justify-content: flex-end;
+					flex-shrink: 0;
+					padding: 16px 24px 20px;
+					border-top: 1px solid #eef2f7;
+					background: #fff;
+				}
+				.hh-settings-btn {
+					padding: 12px 24px;
+					border: none;
+					border-radius: 10px;
+					cursor: pointer;
+					font: inherit;
+					font-weight: 600;
+					transition: background .15s ease, transform .15s ease;
+				}
+				.hh-settings-btn:active { transform: scale(0.98); }
+				.hh-settings-btn-muted { background: #64748b; color: #fff; }
+				.hh-settings-btn-muted:hover { background: #475569; }
+				.hh-settings-btn-primary { background: #2563eb; color: #fff; }
+				.hh-settings-btn-primary:hover { background: #1d4ed8; }
 			`;
 		},
 
