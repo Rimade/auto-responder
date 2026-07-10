@@ -89,6 +89,7 @@
 			skipDuplicates: true,
 			detailedLogging: true,
 			hideUIOnLoad: true,
+			randomCoverLetter: false,
 		},
 	};
 
@@ -1188,6 +1189,22 @@
 
 		getActiveText: () => CoverLetters.getActive()?.text || CONFIG.COVER_LETTER_TEMPLATE || '',
 
+		hasAnyText: () => CoverLetters.getAll().some((item) => (item.text || '').trim()),
+
+		pickTextForResponse: () => {
+			if (STATE.settings.randomCoverLetter) {
+				const withText = CoverLetters.getAll().filter((item) => (item.text || '').trim());
+				const pool = withText.length > 0 ? withText : CoverLetters.getAll();
+				if (pool.length === 0) return '';
+				const picked = pool[Math.floor(Math.random() * pool.length)];
+				if (STATE.settings.detailedLogging) {
+					console.log(`🎲 Случайное письмо: «${picked.name}»`);
+				}
+				return picked.text || '';
+			}
+			return CoverLetters.getActiveText();
+		},
+
 		syncActiveToConfig: () => {
 			const active = CoverLetters.getActive();
 			CONFIG.COVER_LETTER_TEMPLATE = active?.text || '';
@@ -1905,6 +1922,7 @@
 		},
 
 		createSettingsPanel: () => {
+			UIBuilder.injectPanelStyles();
 			let panel = document.getElementById('hh-settings-panel');
 			if (panel) {
 				panel.style.display = STATE.settingsVisible ? 'block' : 'none';
@@ -1993,13 +2011,17 @@
 							<h3 style="margin: 0 0 16px 0; font-size: 18px; font-weight: 600; color: #374151;">Сопроводительные письма</h3>
 							<div style="display: grid; gap: 10px; min-width: 0; max-width: 100%;">
 								<div style="display: flex; gap: 8px; min-width: 0;">
-									<select id="setting-letter-select" style="flex:1;min-width:0;box-sizing:border-box;padding:8px;border:1px solid #d1d5db;border-radius:6px;"></select>
+									<select id="setting-letter-select" class="hh-select" style="flex:1;min-width:0;"></select>
 									<button type="button" id="setting-letter-add" style="flex-shrink:0;padding:8px 12px;border:1px solid #dbe3ee;background:#f8fafc;border-radius:6px;cursor:pointer;font-weight:600;">+ Новый</button>
 									<button type="button" id="setting-letter-delete" style="flex-shrink:0;padding:8px 12px;border:1px solid #fecaca;background:#fff;color:#dc2626;border-radius:6px;cursor:pointer;font-weight:600;">Удалить</button>
 								</div>
 								<input type="text" id="setting-letter-name" style="width:100%;max-width:100%;box-sizing:border-box;padding:8px;border:1px solid #d1d5db;border-radius:6px;" placeholder="Название шаблона">
 								<textarea id="setting-cover-letter" style="width: 100%; max-width: 100%; box-sizing: border-box; height: 120px; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; resize: vertical;" placeholder="Используйте {#vacancyName} для подстановки названия вакансии"></textarea>
-								<p style="margin:0;font-size:13px;color:#64748b;line-height:1.5;">Активный шаблон используется при откликах. Переключайте его здесь или в панели справа.</p>
+								<label style="display: flex; align-items: center; gap: 12px; cursor: pointer;">
+									<input type="checkbox" id="setting-random-letter" ${STATE.settings.randomCoverLetter ? 'checked' : ''}>
+									<span>Случайное письмо при каждом отклике</span>
+								</label>
+								<p style="margin:0;font-size:13px;color:#64748b;line-height:1.5;">Если случайный режим выключен — используется выбранный шаблон. Включите, чтобы чередовать письма из списка.</p>
 							</div>
 						</div>
 
@@ -2095,6 +2117,11 @@
 			};
 			panel.querySelector('#setting-filters').onchange = () => {
 				STATE.settings.enableFilters = panel.querySelector('#setting-filters').checked;
+				Utils.saveConfig();
+			};
+			panel.querySelector('#setting-random-letter').onchange = () => {
+				STATE.settings.randomCoverLetter = panel.querySelector('#setting-random-letter').checked;
+				UIBuilder.syncRandomLetterUI();
 				Utils.saveConfig();
 			};
 
@@ -2400,6 +2427,8 @@
 			STATE.settings.smartDelay = panel.querySelector('#setting-smart-delay').checked;
 			STATE.settings.enableFilters = panel.querySelector('#setting-filters').checked;
 			STATE.settings.hideUIOnLoad = panel.querySelector('#setting-hide-ui').checked;
+			STATE.settings.randomCoverLetter =
+				panel.querySelector('#setting-random-letter')?.checked || false;
 
 			CONFIG.MIN_SALARY = parseInt(panel.querySelector('#setting-min-salary').value) || 0;
 			CONFIG.MAX_SALARY = parseInt(panel.querySelector('#setting-max-salary').value) || 0;
@@ -2453,6 +2482,7 @@
 				skipDuplicates: true,
 				detailedLogging: true,
 				hideUIOnLoad: true,
+				randomCoverLetter: false,
 			});
 
 			Object.assign(CONFIG, {
@@ -2544,7 +2574,10 @@
 			}
 
 			if (data.letterRequired || data.letter_required) {
-				if (!CoverLetters.getActiveText()?.trim()) {
+				const hasLetter = STATE.settings.randomCoverLetter
+					? CoverLetters.hasAnyText()
+					: CoverLetters.getActiveText()?.trim();
+				if (!hasLetter) {
 					return {
 						error: true,
 						message: 'Обязательное письмо',
@@ -2655,7 +2688,7 @@
 			form.append('resume_hash', CONFIG.RESUME_HASH);
 			form.append('ignore_postponed', 'true');
 
-			const coverLetter = CoverLetters.getActiveText().replace('{#vacancyName}', title);
+			const coverLetter = CoverLetters.pickTextForResponse().replace('{#vacancyName}', title);
 			if (coverLetter.trim()) {
 				form.append('letter', coverLetter);
 			}
@@ -3507,6 +3540,10 @@
 				<div class="hh-panel-section">
 					<div class="hh-panel-label">Сопроводительное письмо</div>
 					<select id="hh-letter-select" class="hh-select"></select>
+					<label class="hh-check-row" for="hh-random-letter">
+						<input type="checkbox" id="hh-random-letter" ${STATE.settings.randomCoverLetter ? 'checked' : ''}>
+						<span>Случайное из списка</span>
+					</label>
 					<div id="hh-letter-hint" class="hh-hint"></div>
 				</div>
 				<div class="hh-panel-section">
@@ -3522,6 +3559,7 @@
 			UIBuilder.refreshSearchSelect(panel.querySelector('#hh-search-select'));
 			UIBuilder.refreshLetterSelect(panel.querySelector('#hh-letter-select'));
 			UIBuilder.renderLimitChips(panel.querySelector('#hh-limit-chips'));
+			UIBuilder.syncRandomLetterUI(panel);
 
 			const pageType = Utils.detectPageType();
 			const hint = panel.querySelector('#hh-search-hint');
@@ -3553,9 +3591,31 @@
 				letterSelect.onchange = () => {
 					CoverLetters.setSelectedId(letterSelect.value);
 					UI.refreshLetterSettings(document.getElementById('hh-settings-panel'));
+					UIBuilder.refreshLetterSelect(letterSelect, letterSelect.value);
 					Utils.saveConfig();
-					const active = CoverLetters.getActive();
-					UI.showNotification('Письмо', `Выбрано: «${active?.name || 'шаблон'}»`, 'info', 2000);
+					if (!STATE.settings.randomCoverLetter) {
+						const active = CoverLetters.getActive();
+						UI.showNotification('Письмо', `Выбрано: «${active?.name || 'шаблон'}»`, 'info', 2000);
+					}
+				};
+			}
+
+			const randomLetterToggle = panel.querySelector('#hh-random-letter');
+			if (randomLetterToggle) {
+				randomLetterToggle.onchange = () => {
+					STATE.settings.randomCoverLetter = randomLetterToggle.checked;
+					const settingsToggle = document.querySelector('#setting-random-letter');
+					if (settingsToggle) settingsToggle.checked = STATE.settings.randomCoverLetter;
+					UIBuilder.syncRandomLetterUI();
+					Utils.saveConfig();
+					UI.showNotification(
+						'Письмо',
+						STATE.settings.randomCoverLetter
+							? 'Для каждого отклика — случайный шаблон'
+							: 'Используется выбранный шаблон',
+						'info',
+						2500,
+					);
 				};
 			}
 
@@ -3623,9 +3683,12 @@
 		},
 
 		injectPanelStyles: () => {
-			if (document.getElementById('hh-panel-styles')) return;
-			const style = document.createElement('style');
-			style.id = 'hh-panel-styles';
+			let style = document.getElementById('hh-panel-styles');
+			if (!style) {
+				style = document.createElement('style');
+				style.id = 'hh-panel-styles';
+				document.head.appendChild(style);
+			}
 			style.textContent = `
 				.hh-panel {
 					display: grid;
@@ -3656,10 +3719,43 @@
 					background: #fff;
 					color: #0f172a;
 					outline: none;
+					transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+				}
+				.hh-select {
+					appearance: none;
+					-webkit-appearance: none;
+					-moz-appearance: none;
+					cursor: pointer;
+					padding-right: 42px;
+					background-color: #f8fafc;
+					background-image:
+						linear-gradient(45deg, transparent 50%, #64748b 50%),
+						linear-gradient(135deg, #64748b 50%, transparent 50%);
+					background-position:
+						calc(100% - 18px) calc(50% - 2px),
+						calc(100% - 12px) calc(50% - 2px);
+					background-size: 6px 6px, 6px 6px;
+					background-repeat: no-repeat;
+					box-shadow: inset 0 1px 0 rgba(255,255,255,0.8);
+				}
+				.hh-select:hover {
+					border-color: #93c5fd;
+					background-color: #fff;
 				}
 				.hh-select:focus, .hh-input:focus {
 					border-color: #3b82f6;
+					background-color: #fff;
 					box-shadow: 0 0 0 4px rgba(59,130,246,0.12);
+				}
+				.hh-select:disabled {
+					opacity: 0.55;
+					cursor: not-allowed;
+					background-color: #f1f5f9;
+				}
+				.hh-select option {
+					padding: 10px;
+					background: #fff;
+					color: #0f172a;
 				}
 				.hh-input-compact { max-width: 88px; padding: 10px 12px; }
 				.hh-btn-ghost, .hh-btn-small {
@@ -3679,6 +3775,23 @@
 				.hh-btn-ghost:hover, .hh-btn-small:hover { background: #eff6ff; border-color: #93c5fd; color: #1d4ed8; }
 				.hh-inline-form { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
 				.hh-hint, .hh-hint-inline { font-size: 12px; color: #64748b; line-height: 1.45; }
+				.hh-check-row {
+					display: flex;
+					align-items: center;
+					gap: 10px;
+					cursor: pointer;
+					user-select: none;
+					font-size: 13px;
+					font-weight: 600;
+					color: #334155;
+					padding: 2px 0;
+				}
+				.hh-check-row input {
+					width: 16px;
+					height: 16px;
+					accent-color: #2563eb;
+					cursor: pointer;
+				}
 				.hh-chips { display: flex; flex-wrap: wrap; gap: 8px; }
 				.hh-chip {
 					border: 1px solid #dbe3ee;
@@ -3693,7 +3806,40 @@
 				.hh-chip.active { background: #1d4ed8; border-color: #1d4ed8; color: #fff; }
 				.hh-limit-custom { display: flex; align-items: center; gap: 10px; }
 			`;
-			document.head.appendChild(style);
+		},
+
+		syncRandomLetterUI: (root) => {
+			const panel = root || document;
+			const letterSelect =
+				(panel.querySelector && panel.querySelector('#hh-letter-select')) ||
+				document.getElementById('hh-letter-select');
+			const randomToggle =
+				(panel.querySelector && panel.querySelector('#hh-random-letter')) ||
+				document.getElementById('hh-random-letter');
+			const settingsToggle = document.querySelector('#setting-random-letter');
+			const enabled = !!STATE.settings.randomCoverLetter;
+
+			if (randomToggle) randomToggle.checked = enabled;
+			if (settingsToggle) settingsToggle.checked = enabled;
+			if (letterSelect) {
+				letterSelect.disabled = enabled;
+				letterSelect.title = enabled
+					? 'Выключено: включён случайный выбор письма'
+					: 'Выберите шаблон письма';
+			}
+
+			const hint = document.getElementById('hh-letter-hint');
+			if (hint) {
+				if (enabled) {
+					const count = CoverLetters.getAll().filter((item) => (item.text || '').trim()).length;
+					hint.textContent =
+						count > 0
+							? `🎲 Для каждого отклика — случайный шаблон (${count} с текстом)`
+							: '🎲 Случайный режим: добавьте текст хотя бы в один шаблон';
+				} else if (letterSelect) {
+					UIBuilder.refreshLetterSelect(letterSelect);
+				}
+			}
 		},
 
 		refreshSearchSelect: (selectEl, forceId) => {
@@ -3746,11 +3892,19 @@
 
 			const hint = document.getElementById('hh-letter-hint');
 			if (hint) {
-				const active = CoverLetters.getActive();
-				const preview = (active?.text || '').trim();
-				hint.textContent = preview
-					? preview.slice(0, 90) + (preview.length > 90 ? '…' : '')
-					: 'Пустой шаблон — письмо не будет отправлено';
+				if (STATE.settings.randomCoverLetter) {
+					const count = CoverLetters.getAll().filter((item) => (item.text || '').trim()).length;
+					hint.textContent =
+						count > 0
+							? `🎲 Для каждого отклика — случайный шаблон (${count} с текстом)`
+							: '🎲 Случайный режим: добавьте текст хотя бы в один шаблон';
+				} else {
+					const active = CoverLetters.getActive();
+					const preview = (active?.text || '').trim();
+					hint.textContent = preview
+						? preview.slice(0, 90) + (preview.length > 90 ? '…' : '')
+						: 'Пустой шаблон — письмо не будет отправлено';
+				}
 			}
 		},
 
