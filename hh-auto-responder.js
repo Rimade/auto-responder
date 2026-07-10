@@ -1747,14 +1747,14 @@
 					flex-direction: column;
 					overflow: hidden;
 					box-sizing: border-box;
-					background: rgba(255, 255, 255, 0.62);
+					background: rgba(255, 255, 255, 0.84);
 					border: 1px solid rgba(226, 232, 240, 0.75);
 					border-radius: 16px;
 					box-shadow: 0 16px 48px rgba(15, 23, 42, 0.14);
 					z-index: 10001;
 					font-family: system-ui, -apple-system, sans-serif;
-					backdrop-filter: blur(18px) saturate(1.35);
-					-webkit-backdrop-filter: blur(18px) saturate(1.35);
+					backdrop-filter: blur(8px) saturate(1.15);
+					-webkit-backdrop-filter: blur(8px) saturate(1.15);
 				`;
 
 				modal.innerHTML = `
@@ -1777,9 +1777,9 @@
 							flex-shrink: 0;
 							padding: 16px 18px 14px;
 							border-bottom: 1px solid rgba(238, 242, 247, 0.8);
-							background: rgba(255, 255, 255, 0.4);
-							backdrop-filter: blur(12px);
-							-webkit-backdrop-filter: blur(12px);
+							background: rgba(255, 255, 255, 0.72);
+							backdrop-filter: blur(6px);
+							-webkit-backdrop-filter: blur(6px);
 						}
 						#hh-api-modal .modal-header-text { min-width: 0; flex: 1; }
 						#hh-api-modal .modal-title {
@@ -1812,8 +1812,8 @@
 							color: #64748b;
 							cursor: pointer;
 							flex-shrink: 0;
-							backdrop-filter: blur(8px);
-							-webkit-backdrop-filter: blur(8px);
+							backdrop-filter: blur(4px);
+							-webkit-backdrop-filter: blur(4px);
 							transition: background .15s ease, border-color .15s ease, color .15s ease, transform .15s ease;
 						}
 						#hh-api-modal .modal-close:hover {
@@ -2398,12 +2398,12 @@
 				flex-direction: column;
 				overflow: hidden;
 				box-sizing: border-box;
-				background: rgba(255, 255, 255, 0.62);
+				background: rgba(255, 255, 255, 0.84);
 				border: 1px solid rgba(226, 232, 240, 0.75);
 				border-radius: 20px;
 				box-shadow: 0 20px 60px rgba(15, 23, 42, 0.16);
-				backdrop-filter: blur(18px) saturate(1.35);
-				-webkit-backdrop-filter: blur(18px) saturate(1.35);
+				backdrop-filter: blur(8px) saturate(1.15);
+				-webkit-backdrop-filter: blur(8px) saturate(1.15);
 				z-index: 10005;
 				font-family: system-ui, -apple-system, sans-serif;
 			`;
@@ -4207,11 +4207,11 @@
 				box-sizing: border-box;
 				font-family: system-ui, -apple-system, sans-serif;
 				border-radius: 16px;
-				background: rgba(255, 255, 255, 0.62);
+				background: rgba(255, 255, 255, 0.84);
 				border: 1px solid rgba(226, 232, 240, 0.75);
 				box-shadow: 0 12px 40px rgba(15, 23, 42, 0.12);
-				backdrop-filter: blur(18px) saturate(1.35);
-				-webkit-backdrop-filter: blur(18px) saturate(1.35);
+				backdrop-filter: blur(8px) saturate(1.15);
+				-webkit-backdrop-filter: blur(8px) saturate(1.15);
 			`;
 
 			const header = document.createElement('div');
@@ -4465,9 +4465,9 @@
 					flex-shrink: 0;
 					padding: 14px 16px;
 					border-bottom: 1px solid rgba(238, 242, 247, 0.8);
-					background: rgba(255, 255, 255, 0.4);
-					backdrop-filter: blur(12px);
-					-webkit-backdrop-filter: blur(12px);
+					background: rgba(255, 255, 255, 0.72);
+					backdrop-filter: blur(6px);
+					-webkit-backdrop-filter: blur(6px);
 				}
 				.hh-ui-title {
 					margin: 0;
@@ -4636,9 +4636,9 @@
 					flex-shrink: 0;
 					padding: 20px 24px 16px;
 					border-bottom: 1px solid rgba(238, 242, 247, 0.8);
-					background: rgba(255, 255, 255, 0.4);
-					backdrop-filter: blur(12px);
-					-webkit-backdrop-filter: blur(12px);
+					background: rgba(255, 255, 255, 0.72);
+					backdrop-filter: blur(6px);
+					-webkit-backdrop-filter: blur(6px);
 				}
 				.hh-settings-title {
 					margin: 0;
@@ -4659,8 +4659,8 @@
 					color: #64748b;
 					cursor: pointer;
 					flex-shrink: 0;
-					backdrop-filter: blur(8px);
-					-webkit-backdrop-filter: blur(8px);
+					backdrop-filter: blur(4px);
+					-webkit-backdrop-filter: blur(4px);
 					transition: background .15s ease, border-color .15s ease, color .15s ease, transform .15s ease;
 				}
 				.hh-settings-close:hover {
@@ -4686,9 +4686,9 @@
 					flex-shrink: 0;
 					padding: 16px 24px 20px;
 					border-top: 1px solid rgba(238, 242, 247, 0.8);
-					background: rgba(255, 255, 255, 0.45);
-					backdrop-filter: blur(12px);
-					-webkit-backdrop-filter: blur(12px);
+					background: rgba(255, 255, 255, 0.72);
+					backdrop-filter: blur(6px);
+					-webkit-backdrop-filter: blur(6px);
 				}
 				.hh-settings-btn {
 					padding: 12px 24px;
