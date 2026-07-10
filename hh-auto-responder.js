@@ -699,6 +699,31 @@
 			return div.innerHTML;
 		},
 
+		copyToClipboard: async (text) => {
+			try {
+				if (navigator.clipboard?.writeText) {
+					await navigator.clipboard.writeText(text);
+					return true;
+				}
+			} catch {
+				// fallback below
+			}
+
+			try {
+				const ta = document.createElement('textarea');
+				ta.value = text;
+				ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
+				document.body.appendChild(ta);
+				ta.focus();
+				ta.select();
+				const ok = document.execCommand('copy');
+				document.body.removeChild(ta);
+				return ok;
+			} catch {
+				return false;
+			}
+		},
+
 		getSmartDelay: () => {
 			if (!STATE.settings.smartDelay) {
 				return CONFIG.DELAY_BETWEEN_RESPONSES;
@@ -1074,6 +1099,24 @@
 				const next = items[0]?.id || SEARCH_PRESETS[0]?.id || '__current__';
 				SavedSearches.setSelectedId(next);
 			}
+		},
+
+		update: (id, name, url) => {
+			const trimmedName = name?.trim();
+			const trimmedUrl = url?.trim();
+			if (!trimmedName || !trimmedUrl) return false;
+
+			const items = SavedSearches.getCustom();
+			const index = items.findIndex((item) => item.id === id);
+			if (index === -1) return false;
+
+			items[index] = {
+				...items[index],
+				name: trimmedName,
+				url: trimmedUrl.startsWith('http') ? trimmedUrl : Utils.resolveFullUrl(trimmedUrl),
+			};
+			SavedSearches.saveCustom(items);
+			return true;
 		},
 
 		suggestNameFromUrl: (url) => {
@@ -2016,6 +2059,58 @@
 			if (!container) return;
 			const items = SavedSearches.getCustom();
 
+			const iconSvg = {
+				copy: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
+				edit: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
+				delete:
+					'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>',
+			};
+
+			const createIconButton = (label, svg, onClick, { danger = false } = {}) => {
+				const btn = document.createElement('button');
+				btn.type = 'button';
+				btn.title = label;
+				btn.setAttribute('aria-label', label);
+				btn.innerHTML = svg;
+
+				const base = danger
+					? {
+							bg: '#fff',
+							border: '#fecaca',
+							color: '#dc2626',
+							hoverBg: '#fee2e2',
+							hoverBorder: '#fca5a5',
+							hoverColor: '#b91c1c',
+						}
+					: {
+							bg: '#fff',
+							border: '#e5e7eb',
+							color: '#64748b',
+							hoverBg: '#eff6ff',
+							hoverBorder: '#93c5fd',
+							hoverColor: '#1d4ed8',
+						};
+
+				btn.style.cssText = `display:flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border:1px solid ${base.border};border-radius:8px;background:${base.bg};cursor:pointer;color:${base.color};flex-shrink:0;transition:background .15s,border-color .15s,color .15s;`;
+				btn.onmouseenter = () => {
+					btn.style.background = base.hoverBg;
+					btn.style.borderColor = base.hoverBorder;
+					btn.style.color = base.hoverColor;
+				};
+				btn.onmouseleave = () => {
+					btn.style.background = base.bg;
+					btn.style.borderColor = base.border;
+					btn.style.color = base.color;
+				};
+				btn.onclick = onClick;
+				return btn;
+			};
+
+			const refreshSearchSelect = () => {
+				const select = document.getElementById('hh-search-select');
+				if (select) UIBuilder.refreshSearchSelect(select);
+			};
+
 			if (items.length === 0) {
 				container.innerHTML =
 					'<div style="padding:12px;border:1px dashed #dbe3ee;border-radius:12px;color:#64748b;font-size:13px;word-break:break-word;">Пока нет сохранённых поисков. Используйте «+ Сохранить» в панели справа.</div>';
@@ -2045,21 +2140,53 @@
 				info.appendChild(title);
 				info.appendChild(url);
 
-				const removeBtn = document.createElement('button');
-				removeBtn.type = 'button';
-				removeBtn.textContent = 'Удалить';
-				removeBtn.style.cssText =
-					'flex-shrink:0;border:none;background:#fee2e2;color:#b91c1c;border-radius:8px;padding:8px 12px;cursor:pointer;font-weight:600;white-space:nowrap;';
-				removeBtn.onclick = () => {
-					SavedSearches.remove(item.id);
-					UI.renderSavedSearchesSettings(container);
-					const select = document.getElementById('hh-search-select');
-					if (select) UIBuilder.refreshSearchSelect(select);
-					UI.showNotification('Удалено', `Поиск «${item.name}» удалён`, 'info');
-				};
+				const actions = document.createElement('div');
+				actions.style.cssText = 'display:flex;gap:4px;flex-shrink:0;align-items:center;';
+
+				actions.appendChild(
+					createIconButton('Копировать URL', iconSvg.copy, async () => {
+						const ok = await Utils.copyToClipboard(item.url);
+						UI.showNotification(
+							ok ? 'Скопировано' : 'Ошибка',
+							ok ? 'URL поиска в буфере обмена' : 'Не удалось скопировать URL',
+							ok ? 'success' : 'error',
+							2500,
+						);
+					}),
+				);
+
+				actions.appendChild(
+					createIconButton('Редактировать', iconSvg.edit, () => {
+						const newName = prompt('Название поиска', item.name);
+						if (newName === null) return;
+						const newUrl = prompt('URL поиска', item.url);
+						if (newUrl === null) return;
+						if (SavedSearches.update(item.id, newName, newUrl)) {
+							UI.renderSavedSearchesSettings(container);
+							refreshSearchSelect();
+							UI.showNotification('Сохранено', `Поиск «${newName.trim()}» обновлён`, 'success');
+						} else {
+							UI.showNotification('Ошибка', 'Укажите название и URL поиска', 'error');
+						}
+					}),
+				);
+
+				actions.appendChild(
+					createIconButton(
+						'Удалить',
+						iconSvg.delete,
+						() => {
+							SavedSearches.remove(item.id);
+							UI.renderSavedSearchesSettings(container);
+							refreshSearchSelect();
+							UI.showNotification('Удалено', `Поиск «${item.name}» удалён`, 'info');
+						},
+						{ danger: true },
+					),
+				);
 
 				row.appendChild(info);
-				row.appendChild(removeBtn);
+				row.appendChild(actions);
 				container.appendChild(row);
 			});
 		},
