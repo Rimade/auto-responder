@@ -72,6 +72,7 @@
 		uiCollapsed: false,
 		modalVisible: true,
 		modalTab: 'responses',
+		settingsTab: 'general',
 		currentVacancy: null,
 		consecutiveFailures: 0,
 		consecutiveAlreadyApplied: 0,
@@ -1929,6 +1930,7 @@
 				if (STATE.settingsVisible) {
 					UI.refreshSavedSearchesSettings();
 					UI.refreshLetterSettings(panel);
+					UI.switchSettingsTab(STATE.settingsTab || 'general');
 				}
 				return panel;
 			}
@@ -1956,12 +1958,17 @@
 
 			panel.innerHTML = `
 				<div style="padding: 32px; position: relative; overflow-x: hidden; box-sizing: border-box; max-width: 100%;">
-					<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 32px;">
+					<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
 						<h2 style="margin: 0; font-size: 24px; font-weight: 700; color: #1e293b;">⚙️ Настройки</h2>
 					</div>
 					<button id="settings-close" style="position: absolute; top: 20px; right: 20px; background: rgba(255, 255, 255, 0.95); border: 1px solid #e5e7eb; font-size: 28px; cursor: pointer; color: #64748b; padding: 8px; border-radius: 8px; z-index: 10006; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);">×</button>
 
-					<div style="display: grid; gap: 24px; min-width: 0; max-width: 100%;">
+					<div class="hh-settings-tabs" role="tablist">
+						<button type="button" class="hh-settings-tab ${STATE.settingsTab === 'general' ? 'active' : ''}" data-settings-tab="general" role="tab">Основные</button>
+						<button type="button" class="hh-settings-tab ${STATE.settingsTab === 'filters' ? 'active' : ''}" data-settings-tab="filters" role="tab">Фильтры</button>
+					</div>
+
+					<div id="hh-settings-tab-general" class="hh-settings-tab-panel" style="display:${STATE.settingsTab === 'general' ? 'grid' : 'none'}; gap: 24px; min-width: 0; max-width: 100%;">
 						<!-- Основные настройки -->
 						<div>
 							<h3 style="margin: 0 0 16px 0; font-size: 18px; font-weight: 600; color: #374151;">Основные настройки</h3>
@@ -2001,9 +2008,9 @@
 						<!-- Хеш резюме -->
 						<div>
 							<h3 style="margin: 0 0 16px 0; font-size: 18px; font-weight: 600; color: #374151;">Хеш резюме</h3>
-							<input type="text" id="setting-resume-hash" value="${
+							<input type="text" id="setting-resume-hash" class="hh-input" value="${
 								CONFIG.RESUME_HASH
-							}" style="width: 100%; max-width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px;" placeholder="Введите хеш вашего резюме">
+							}" placeholder="Введите хеш вашего резюме">
 						</div>
 
 						<!-- Сопроводительные письма -->
@@ -2012,42 +2019,40 @@
 							<div style="display: grid; gap: 10px; min-width: 0; max-width: 100%;">
 								<div style="display: flex; gap: 8px; min-width: 0;">
 									<select id="setting-letter-select" class="hh-select" style="flex:1;min-width:0;"></select>
-									<button type="button" id="setting-letter-add" style="flex-shrink:0;padding:8px 12px;border:1px solid #dbe3ee;background:#f8fafc;border-radius:6px;cursor:pointer;font-weight:600;">+ Новый</button>
-									<button type="button" id="setting-letter-delete" style="flex-shrink:0;padding:8px 12px;border:1px solid #fecaca;background:#fff;color:#dc2626;border-radius:6px;cursor:pointer;font-weight:600;">Удалить</button>
+									<button type="button" id="setting-letter-add" class="hh-btn-ghost" style="flex:0;white-space:nowrap;">+ Новый</button>
+									<button type="button" id="setting-letter-delete" style="flex-shrink:0;padding:10px 12px;border:1px solid #fecaca;background:#fff;color:#dc2626;border-radius:10px;cursor:pointer;font-weight:600;">Удалить</button>
 								</div>
-								<input type="text" id="setting-letter-name" style="width:100%;max-width:100%;box-sizing:border-box;padding:8px;border:1px solid #d1d5db;border-radius:6px;" placeholder="Название шаблона">
-								<textarea id="setting-cover-letter" style="width: 100%; max-width: 100%; box-sizing: border-box; height: 120px; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; resize: vertical;" placeholder="Используйте {#vacancyName} для подстановки названия вакансии"></textarea>
-								<label style="display: flex; align-items: center; gap: 12px; cursor: pointer;">
+								<input type="text" id="setting-letter-name" class="hh-input" placeholder="Название шаблона">
+								<textarea id="setting-cover-letter" class="hh-input" style="height: 120px; resize: vertical;" placeholder="Используйте {#vacancyName} для подстановки названия вакансии"></textarea>
+								<label class="hh-check-row" for="setting-random-letter">
 									<input type="checkbox" id="setting-random-letter" ${STATE.settings.randomCoverLetter ? 'checked' : ''}>
 									<span>Случайное письмо при каждом отклике</span>
 								</label>
 								<p style="margin:0;font-size:13px;color:#64748b;line-height:1.5;">Если случайный режим выключен — используется выбранный шаблон. Включите, чтобы чередовать письма из списка.</p>
 							</div>
 						</div>
+					</div>
 
+					<div id="hh-settings-tab-filters" class="hh-settings-tab-panel" style="display:${STATE.settingsTab === 'filters' ? 'grid' : 'none'}; gap: 24px; min-width: 0; max-width: 100%;">
 						<!-- Фильтры -->
 						<div>
 							<h3 style="margin: 0 0 16px 0; font-size: 18px; font-weight: 600; color: #374151;">Фильтры</h3>
 							<div style="display: grid; gap: 12px;">
-								<label style="display: flex; align-items: center; gap: 12px; cursor: pointer;">
+								<label class="hh-check-row" for="setting-filters">
 									<input type="checkbox" id="setting-filters" ${STATE.settings.enableFilters ? 'checked' : ''}>
 									<span>Включить фильтрацию</span>
 								</label>
 								<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
 									<div>
 										<label style="display: block; margin-bottom: 4px; font-weight: 500;">Мин. зарплата:</label>
-										<input type="number" id="setting-min-salary" value="${
-											CONFIG.MIN_SALARY
-										}" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px;">
+										<input type="number" id="setting-min-salary" class="hh-input" value="${CONFIG.MIN_SALARY}">
 									</div>
 									<div>
 										<label style="display: block; margin-bottom: 4px; font-weight: 500;">Макс. зарплата:</label>
-										<input type="number" id="setting-max-salary" value="${
-											CONFIG.MAX_SALARY
-										}" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px;">
+										<input type="number" id="setting-max-salary" class="hh-input" value="${CONFIG.MAX_SALARY}">
 									</div>
 								</div>
-								<label style="display: flex; align-items: center; gap: 12px; cursor: pointer;">
+								<label class="hh-check-row" for="setting-skip-no-salary">
 									<input type="checkbox" id="setting-skip-no-salary" ${CONFIG.SKIP_WITHOUT_SALARY ? 'checked' : ''}>
 									<span>Пропускать без зарплаты</span>
 								</label>
@@ -2060,30 +2065,30 @@
 							<div style="display: grid; gap: 12px;">
 								<div>
 									<label style="display: block; margin-bottom: 4px; font-weight: 500;">Обязательные слова (через запятую):</label>
-									<input type="text" id="setting-required-keywords" value="${CONFIG.REQUIRED_KEYWORDS.join(
+									<input type="text" id="setting-required-keywords" class="hh-input" value="${CONFIG.REQUIRED_KEYWORDS.join(
 										', ',
-									)}" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px;" placeholder="React, JavaScript, Frontend">
+									)}" placeholder="React, JavaScript, Frontend">
 								</div>
 								<div>
 									<label style="display: block; margin-bottom: 4px; font-weight: 500;">Исключающие слова (через запятую):</label>
-									<input type="text" id="setting-excluded-keywords" value="${CONFIG.EXCLUDED_KEYWORDS.join(
+									<input type="text" id="setting-excluded-keywords" class="hh-input" value="${CONFIG.EXCLUDED_KEYWORDS.join(
 										', ',
-									)}" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px;" placeholder="PHP, Java, Backend">
+									)}" placeholder="PHP, Java, Backend">
 								</div>
 								<div>
 									<label style="display: block; margin-bottom: 4px; font-weight: 500;">Черный список компаний (через запятую):</label>
-									<input type="text" id="setting-blacklist" value="${CONFIG.BLACKLIST_COMPANIES.join(
+									<input type="text" id="setting-blacklist" class="hh-input" value="${CONFIG.BLACKLIST_COMPANIES.join(
 										', ',
-									)}" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px;" placeholder="Компания1, Компания2">
+									)}" placeholder="Компания1, Компания2">
 								</div>
 							</div>
 						</div>
+					</div>
 
-						<!-- Кнопки -->
-						<div style="display: flex; gap: 12px; justify-content: flex-end; margin-top: 16px;">
-							<button id="settings-reset" style="padding: 12px 24px; background: #6b7280; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500;">Сбросить</button>
-							<button id="settings-save" style="padding: 12px 24px; background: #3b82f6; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500;">Сохранить</button>
-						</div>
+					<!-- Кнопки -->
+					<div style="display: flex; gap: 12px; justify-content: flex-end; margin-top: 24px;">
+						<button id="settings-reset" style="padding: 12px 24px; background: #6b7280; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500;">Сбросить</button>
+						<button id="settings-save" style="padding: 12px 24px; background: #2563eb; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500;">Сохранить</button>
 					</div>
 				</div>
 			`;
@@ -2094,6 +2099,10 @@
 				STATE.settingsVisible = false;
 				panel.style.display = 'none';
 			};
+
+			panel.querySelectorAll('[data-settings-tab]').forEach((tab) => {
+				tab.onclick = () => UI.switchSettingsTab(tab.dataset.settingsTab);
+			});
 
 			panel.querySelector('#setting-notifications').onchange = () => {
 				STATE.settings.showNotifications = panel.querySelector('#setting-notifications').checked;
@@ -2515,6 +2524,23 @@
 			STATE.settingsVisible = true;
 			UI.createSettingsPanel();
 			UI.refreshSavedSearchesSettings();
+			UI.switchSettingsTab(STATE.settingsTab || 'general');
+		},
+
+		switchSettingsTab: (tabName) => {
+			const nextTab = tabName === 'filters' ? 'filters' : 'general';
+			STATE.settingsTab = nextTab;
+			const panel = document.getElementById('hh-settings-panel');
+			if (!panel) return;
+
+			panel.querySelectorAll('[data-settings-tab]').forEach((tab) => {
+				tab.classList.toggle('active', tab.dataset.settingsTab === nextTab);
+			});
+
+			const generalPanel = panel.querySelector('#hh-settings-tab-general');
+			const filtersPanel = panel.querySelector('#hh-settings-tab-filters');
+			if (generalPanel) generalPanel.style.display = nextTab === 'general' ? 'grid' : 'none';
+			if (filtersPanel) filtersPanel.style.display = nextTab === 'filters' ? 'grid' : 'none';
 		},
 
 		switchSettings: () => {
@@ -3805,6 +3831,42 @@
 				}
 				.hh-chip.active { background: #1d4ed8; border-color: #1d4ed8; color: #fff; }
 				.hh-limit-custom { display: flex; align-items: center; gap: 10px; }
+				.hh-settings-tabs {
+					display: grid;
+					grid-template-columns: 1fr 1fr;
+					gap: 6px;
+					padding: 6px;
+					margin-bottom: 24px;
+					background: #f1f5f9;
+					border-radius: 14px;
+					border: 1px solid #e2e8f0;
+				}
+				.hh-settings-tab {
+					border: none;
+					background: transparent;
+					color: #64748b;
+					border-radius: 10px;
+					padding: 12px 14px;
+					font: inherit;
+					font-size: 14px;
+					font-weight: 700;
+					cursor: pointer;
+					transition: background .15s ease, color .15s ease, box-shadow .15s ease;
+				}
+				.hh-settings-tab:hover {
+					color: #0f172a;
+					background: rgba(255,255,255,0.55);
+				}
+				.hh-settings-tab.active {
+					background: #fff;
+					color: #0f172a;
+					box-shadow: 0 1px 3px rgba(15,23,42,0.08);
+				}
+				#hh-settings-panel .hh-input,
+				#hh-settings-panel .hh-select {
+					width: 100%;
+					max-width: 100%;
+				}
 			`;
 		},
 
