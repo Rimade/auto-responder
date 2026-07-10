@@ -1805,6 +1805,7 @@
 			let panel = document.getElementById('hh-settings-panel');
 			if (panel) {
 				panel.style.display = STATE.settingsVisible ? 'block' : 'none';
+				if (STATE.settingsVisible) UI.refreshSavedSearchesSettings();
 				return panel;
 			}
 
@@ -2055,6 +2056,11 @@
 			return panel;
 		},
 
+		refreshSavedSearchesSettings: () => {
+			const container = document.querySelector('#hh-settings-searches');
+			if (container) UI.renderSavedSearchesSettings(container);
+		},
+
 		renderSavedSearchesSettings: (container) => {
 			if (!container) return;
 			const items = SavedSearches.getCustom();
@@ -2281,8 +2287,7 @@
 		openSettings: () => {
 			STATE.settingsVisible = true;
 			UI.createSettingsPanel();
-			const panel = document.getElementById('hh-settings-panel');
-			UI.renderSavedSearchesSettings(panel?.querySelector('#hh-settings-searches'));
+			UI.refreshSavedSearchesSettings();
 		},
 
 		switchSettings: () => {
@@ -2290,6 +2295,7 @@
 			if (panel) {
 				STATE.settingsVisible = !STATE.settingsVisible;
 				panel.style.display = STATE.settingsVisible ? 'block' : 'none';
+				if (STATE.settingsVisible) UI.refreshSavedSearchesSettings();
 			} else {
 				STATE.settingsVisible = true;
 				UI.createSettingsPanel();
@@ -3379,6 +3385,7 @@
 					}
 					saveForm.style.display = 'none';
 					UIBuilder.refreshSearchSelect(select, entry.id);
+					UI.refreshSavedSearchesSettings();
 					if (hint) hint.textContent = 'Поиск сохранён — он появится в списке';
 					UI.showNotification('Сохранено', `Поиск «${entry.name}» добавлен`, 'success');
 				};
