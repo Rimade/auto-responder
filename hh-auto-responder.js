@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name           HH.ru Custom Script
 // @namespace      http://tampermonkey.net/
-// @version        2.0
-// @description    Автооткликер на HeadHunter — поиски, лимиты, ручные отклики
+// @version        2.1
+// @description    Автооткликер на HeadHunter — поиски, лимиты, шаблоны писем
 // @author         Genzor
 // @match          https://hh.ru/*
 // @match          https://*.hh.ru/*
@@ -16,7 +16,7 @@
 	// ===== КОНФИГУРАЦИЯ =====
 	const CONFIG = {
 		RESUME_HASH: '', // ⚠️ ОБЯЗАТЕЛЬНО заполнить хеш резюме!
-		COVER_LETTER_TEMPLATE: ``, // ЖЕЛАТЕЛЬНО написать сопроводительное письмо.
+		COVER_LETTER_TEMPLATE: ``, // Активный текст письма (синхронизируется с CoverLetters)
 
 		// API endpoints — origin подставляется при инициализации (поддержка nazran.hh.ru и др.)
 		VACANCY_API_URL: '',
@@ -44,6 +44,8 @@
 		FILTER_URL_KEY: 'hh_filter_url',
 		SAVED_SEARCHES_KEY: 'hh_saved_searches',
 		SELECTED_SEARCH_KEY: 'hh_selected_search_id',
+		COVER_LETTERS_KEY: 'hh_cover_letters',
+		SELECTED_LETTER_KEY: 'hh_selected_letter_id',
 		MANUAL_QUEUE_KEY: 'hh_manual_queue',
 		LOG_KEY: 'hh_api_log',
 		SENT_RESPONSES_KEY: 'hh_sent_responses',
@@ -51,6 +53,9 @@
 		SETTINGS_KEY: 'hh_settings',
 		CONFIG_KEY: 'hh_config',
 	};
+
+	const DEFAULT_COVER_LETTER =
+		'Здравствуйте! Меня заинтересовала ваша вакансия "{#vacancyName}". У меня есть необходимый опыт и навыки для этой позиции. Буду рад обсудить детали сотрудничества.';
 
 	// ===== СОСТОЯНИЕ =====
 	const STATE = {
@@ -1150,6 +1155,104 @@
 		},
 	};
 
+	const CoverLetters = {
+		getAll: () => {
+			try {
+				const items = JSON.parse(localStorage.getItem(CONFIG.COVER_LETTERS_KEY) || '[]');
+				return Array.isArray(items) ? items : [];
+			} catch {
+				return [];
+			}
+		},
+
+		saveAll: (items) => {
+			localStorage.setItem(CONFIG.COVER_LETTERS_KEY, JSON.stringify(items));
+		},
+
+		getSelectedId: () => localStorage.getItem(CONFIG.SELECTED_LETTER_KEY) || '',
+
+		setSelectedId: (id) => {
+			if (id) localStorage.setItem(CONFIG.SELECTED_LETTER_KEY, id);
+			else localStorage.removeItem(CONFIG.SELECTED_LETTER_KEY);
+			CoverLetters.syncActiveToConfig();
+		},
+
+		findById: (id) => CoverLetters.getAll().find((item) => item.id === id) || null,
+
+		getActive: () => {
+			const items = CoverLetters.getAll();
+			if (items.length === 0) return null;
+			const selectedId = CoverLetters.getSelectedId();
+			return items.find((item) => item.id === selectedId) || items[0];
+		},
+
+		getActiveText: () => CoverLetters.getActive()?.text || CONFIG.COVER_LETTER_TEMPLATE || '',
+
+		syncActiveToConfig: () => {
+			const active = CoverLetters.getActive();
+			CONFIG.COVER_LETTER_TEMPLATE = active?.text || '';
+		},
+
+		add: (name, text = '') => {
+			const trimmedName = name?.trim();
+			if (!trimmedName) return null;
+
+			const items = CoverLetters.getAll();
+			const entry = {
+				id: `letter-${Date.now()}`,
+				name: trimmedName,
+				text: text ?? '',
+			};
+			items.unshift(entry);
+			CoverLetters.saveAll(items);
+			CoverLetters.setSelectedId(entry.id);
+			return entry;
+		},
+
+		update: (id, patch) => {
+			const items = CoverLetters.getAll();
+			const index = items.findIndex((item) => item.id === id);
+			if (index === -1) return false;
+
+			const nextName = patch.name !== undefined ? String(patch.name).trim() : items[index].name;
+			if (!nextName) return false;
+
+			items[index] = {
+				...items[index],
+				name: nextName,
+				text: patch.text !== undefined ? String(patch.text) : items[index].text,
+			};
+			CoverLetters.saveAll(items);
+			if (CoverLetters.getSelectedId() === id) CoverLetters.syncActiveToConfig();
+			return true;
+		},
+
+		remove: (id) => {
+			const items = CoverLetters.getAll().filter((item) => item.id !== id);
+			CoverLetters.saveAll(items);
+			if (CoverLetters.getSelectedId() === id) {
+				CoverLetters.setSelectedId(items[0]?.id || '');
+			} else {
+				CoverLetters.syncActiveToConfig();
+			}
+		},
+
+		ensureMigrated: () => {
+			const items = CoverLetters.getAll();
+			if (items.length > 0) {
+				if (!CoverLetters.getSelectedId() || !CoverLetters.findById(CoverLetters.getSelectedId())) {
+					CoverLetters.setSelectedId(items[0].id);
+				} else {
+					CoverLetters.syncActiveToConfig();
+				}
+				return;
+			}
+
+			const legacy = (CONFIG.COVER_LETTER_TEMPLATE || '').trim();
+			CoverLetters.add('Основное', legacy || DEFAULT_COVER_LETTER);
+		},
+	};
+
 	const ManualQueue = {
 		getAll: () => {
 			try {
@@ -1805,7 +1908,10 @@
 			let panel = document.getElementById('hh-settings-panel');
 			if (panel) {
 				panel.style.display = STATE.settingsVisible ? 'block' : 'none';
-				if (STATE.settingsVisible) UI.refreshSavedSearchesSettings();
+				if (STATE.settingsVisible) {
+					UI.refreshSavedSearchesSettings();
+					UI.refreshLetterSettings(panel);
+				}
 				return panel;
 			}
 
@@ -1882,12 +1988,19 @@
 							}" style="width: 100%; max-width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px;" placeholder="Введите хеш вашего резюме">
 						</div>
 
-						<!-- Сопроводительное письмо -->
+						<!-- Сопроводительные письма -->
 						<div>
-							<h3 style="margin: 0 0 16px 0; font-size: 18px; font-weight: 600; color: #374151;">Сопроводительное письмо</h3>
-							<textarea id="setting-cover-letter" style="width: 100%; max-width: 100%; box-sizing: border-box; height: 120px; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; resize: vertical;" placeholder="Используйте {#vacancyName} для подстановки названия вакансии">${
-								CONFIG.COVER_LETTER_TEMPLATE
-							}</textarea>
+							<h3 style="margin: 0 0 16px 0; font-size: 18px; font-weight: 600; color: #374151;">Сопроводительные письма</h3>
+							<div style="display: grid; gap: 10px; min-width: 0; max-width: 100%;">
+								<div style="display: flex; gap: 8px; min-width: 0;">
+									<select id="setting-letter-select" style="flex:1;min-width:0;box-sizing:border-box;padding:8px;border:1px solid #d1d5db;border-radius:6px;"></select>
+									<button type="button" id="setting-letter-add" style="flex-shrink:0;padding:8px 12px;border:1px solid #dbe3ee;background:#f8fafc;border-radius:6px;cursor:pointer;font-weight:600;">+ Новый</button>
+									<button type="button" id="setting-letter-delete" style="flex-shrink:0;padding:8px 12px;border:1px solid #fecaca;background:#fff;color:#dc2626;border-radius:6px;cursor:pointer;font-weight:600;">Удалить</button>
+								</div>
+								<input type="text" id="setting-letter-name" style="width:100%;max-width:100%;box-sizing:border-box;padding:8px;border:1px solid #d1d5db;border-radius:6px;" placeholder="Название шаблона">
+								<textarea id="setting-cover-letter" style="width: 100%; max-width: 100%; box-sizing: border-box; height: 120px; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; resize: vertical;" placeholder="Используйте {#vacancyName} для подстановки названия вакансии"></textarea>
+								<p style="margin:0;font-size:13px;color:#64748b;line-height:1.5;">Активный шаблон используется при откликах. Переключайте его здесь или в панели справа.</p>
+							</div>
 						</div>
 
 						<!-- Фильтры -->
@@ -2030,8 +2143,44 @@
 			};
 
 			panel.querySelector('#setting-cover-letter').onchange = () => {
-				CONFIG.COVER_LETTER_TEMPLATE = panel.querySelector('#setting-cover-letter').value;
+				UI.persistActiveLetterFromSettings(panel);
+			};
+			panel.querySelector('#setting-letter-name').onchange = () => {
+				UI.persistActiveLetterFromSettings(panel);
+			};
+			panel.querySelector('#setting-letter-select').onchange = () => {
+				const id = panel.querySelector('#setting-letter-select').value;
+				CoverLetters.setSelectedId(id);
+				UI.fillLetterFields(panel);
+				UIBuilder.refreshLetterSelect(document.getElementById('hh-letter-select'));
 				Utils.saveConfig();
+			};
+			panel.querySelector('#setting-letter-add').onclick = () => {
+				const name = prompt('Название шаблона', `Письмо ${CoverLetters.getAll().length + 1}`);
+				if (name === null) return;
+				const entry = CoverLetters.add(name, '');
+				if (!entry) {
+					UI.showNotification('Ошибка', 'Укажите название шаблона', 'error');
+					return;
+				}
+				UI.refreshLetterSettings(panel);
+				UIBuilder.refreshLetterSelect(document.getElementById('hh-letter-select'), entry.id);
+				Utils.saveConfig();
+				UI.showNotification('Добавлено', `Шаблон «${entry.name}» создан`, 'success');
+			};
+			panel.querySelector('#setting-letter-delete').onclick = () => {
+				const items = CoverLetters.getAll();
+				if (items.length <= 1) {
+					UI.showNotification('Нельзя удалить', 'Должен остаться хотя бы один шаблон', 'warning');
+					return;
+				}
+				const active = CoverLetters.getActive();
+				if (!active || !confirm(`Удалить шаблон «${active.name}»?`)) return;
+				CoverLetters.remove(active.id);
+				UI.refreshLetterSettings(panel);
+				UIBuilder.refreshLetterSelect(document.getElementById('hh-letter-select'));
+				Utils.saveConfig();
+				UI.showNotification('Удалено', `Шаблон «${active.name}» удалён`, 'info');
 			};
 
 			panel.querySelector('#setting-resume-hash').onchange = () => {
@@ -2053,7 +2202,50 @@
 
 			document.body.appendChild(panel);
 			UI.renderSavedSearchesSettings(panel.querySelector('#hh-settings-searches'));
+			UI.refreshLetterSettings(panel);
 			return panel;
+		},
+
+		fillLetterFields: (panel) => {
+			if (!panel) return;
+			const active = CoverLetters.getActive();
+			const nameInput = panel.querySelector('#setting-letter-name');
+			const textArea = panel.querySelector('#setting-cover-letter');
+			if (nameInput) nameInput.value = active?.name || '';
+			if (textArea) textArea.value = active?.text || '';
+		},
+
+		refreshLetterSettings: (panel) => {
+			const root = panel || document.getElementById('hh-settings-panel');
+			if (!root) return;
+			const select = root.querySelector('#setting-letter-select');
+			if (!select) return;
+
+			const items = CoverLetters.getAll();
+			const selectedId = CoverLetters.getActive()?.id || '';
+			select.innerHTML = '';
+			items.forEach((item) => {
+				const option = document.createElement('option');
+				option.value = item.id;
+				option.textContent = item.name;
+				select.appendChild(option);
+			});
+			if (selectedId) select.value = selectedId;
+			UI.fillLetterFields(root);
+		},
+
+		persistActiveLetterFromSettings: (panel) => {
+			const root = panel || document.getElementById('hh-settings-panel');
+			if (!root) return;
+			const active = CoverLetters.getActive();
+			if (!active) return;
+
+			const name = root.querySelector('#setting-letter-name')?.value || active.name;
+			const text = root.querySelector('#setting-cover-letter')?.value ?? active.text;
+			CoverLetters.update(active.id, { name, text });
+			UI.refreshLetterSettings(root);
+			UIBuilder.refreshLetterSelect(document.getElementById('hh-letter-select'), active.id);
+			Utils.saveConfig();
 		},
 
 		refreshSavedSearchesSettings: () => {
@@ -2237,9 +2429,10 @@
 						.filter((s) => s)
 				: [];
 
-			CONFIG.COVER_LETTER_TEMPLATE = panel.querySelector('#setting-cover-letter').value;
 			CONFIG.RESUME_HASH = panel.querySelector('#setting-resume-hash').value;
 
+			UI.persistActiveLetterFromSettings(panel);
+			CONFIG.COVER_LETTER_TEMPLATE = CoverLetters.getActiveText();
 			Utils.saveConfig();
 
 			STATE.settingsVisible = false;
@@ -2271,9 +2464,12 @@
 				BLACKLIST_COMPANIES: [],
 				REQUIRED_KEYWORDS: [],
 				EXCLUDED_KEYWORDS: [],
-				COVER_LETTER_TEMPLATE: `Здравствуйте! Меня заинтересовала ваша вакансия "{#vacancyName}". У меня есть необходимый опыт и навыки для этой позиции. Буду рад обсудить детали сотрудничества.`,
+				COVER_LETTER_TEMPLATE: DEFAULT_COVER_LETTER,
 			});
 
+			CoverLetters.saveAll([]);
+			CoverLetters.setSelectedId('');
+			CoverLetters.ensureMigrated();
 			Utils.saveConfig();
 
 			// Обновляем панель настроек
@@ -2282,6 +2478,7 @@
 				panel.remove();
 				UI.createSettingsPanel();
 			}
+			UIBuilder.refreshLetterSelect(document.getElementById('hh-letter-select'));
 		},
 
 		openSettings: () => {
@@ -2347,7 +2544,7 @@
 			}
 
 			if (data.letterRequired || data.letter_required) {
-				if (!CONFIG.COVER_LETTER_TEMPLATE?.trim()) {
+				if (!CoverLetters.getActiveText()?.trim()) {
 					return {
 						error: true,
 						message: 'Обязательное письмо',
@@ -2458,7 +2655,7 @@
 			form.append('resume_hash', CONFIG.RESUME_HASH);
 			form.append('ignore_postponed', 'true');
 
-			const coverLetter = CONFIG.COVER_LETTER_TEMPLATE.replace('{#vacancyName}', title);
+			const coverLetter = CoverLetters.getActiveText().replace('{#vacancyName}', title);
 			if (coverLetter.trim()) {
 				form.append('letter', coverLetter);
 			}
@@ -3308,6 +3505,11 @@
 					<div id="hh-search-hint" class="hh-hint"></div>
 				</div>
 				<div class="hh-panel-section">
+					<div class="hh-panel-label">Сопроводительное письмо</div>
+					<select id="hh-letter-select" class="hh-select"></select>
+					<div id="hh-letter-hint" class="hh-hint"></div>
+				</div>
+				<div class="hh-panel-section">
 					<div class="hh-panel-label">Лимит за запуск</div>
 					<div id="hh-limit-chips" class="hh-chips"></div>
 					<div class="hh-limit-custom">
@@ -3318,6 +3520,7 @@
 			`;
 
 			UIBuilder.refreshSearchSelect(panel.querySelector('#hh-search-select'));
+			UIBuilder.refreshLetterSelect(panel.querySelector('#hh-letter-select'));
 			UIBuilder.renderLimitChips(panel.querySelector('#hh-limit-chips'));
 
 			const pageType = Utils.detectPageType();
@@ -3342,6 +3545,17 @@
 			if (select) {
 				select.onchange = () => {
 					SavedSearches.setSelectedId(select.value);
+				};
+			}
+
+			const letterSelect = panel.querySelector('#hh-letter-select');
+			if (letterSelect) {
+				letterSelect.onchange = () => {
+					CoverLetters.setSelectedId(letterSelect.value);
+					UI.refreshLetterSettings(document.getElementById('hh-settings-panel'));
+					Utils.saveConfig();
+					const active = CoverLetters.getActive();
+					UI.showNotification('Письмо', `Выбрано: «${active?.name || 'шаблон'}»`, 'info', 2000);
 				};
 			}
 
@@ -3510,6 +3724,34 @@
 			const hasSelected = Array.from(selectEl.options).some((opt) => opt.value === selectedId);
 			selectEl.value = hasSelected ? selectedId : selectEl.options[0]?.value || '';
 			SavedSearches.setSelectedId(selectEl.value);
+		},
+
+		refreshLetterSelect: (selectEl, forceId) => {
+			if (!selectEl) return;
+			CoverLetters.ensureMigrated();
+			const items = CoverLetters.getAll();
+			const selectedId = forceId || CoverLetters.getActive()?.id || items[0]?.id || '';
+
+			selectEl.innerHTML = '';
+			items.forEach((item) => {
+				const option = document.createElement('option');
+				option.value = item.id;
+				option.textContent = item.name;
+				selectEl.appendChild(option);
+			});
+
+			const hasSelected = Array.from(selectEl.options).some((opt) => opt.value === selectedId);
+			selectEl.value = hasSelected ? selectedId : selectEl.options[0]?.value || '';
+			if (selectEl.value) CoverLetters.setSelectedId(selectEl.value);
+
+			const hint = document.getElementById('hh-letter-hint');
+			if (hint) {
+				const active = CoverLetters.getActive();
+				const preview = (active?.text || '').trim();
+				hint.textContent = preview
+					? preview.slice(0, 90) + (preview.length > 90 ? '…' : '')
+					: 'Пустой шаблон — письмо не будет отправлено';
+			}
 		},
 
 		renderLimitChips: (container) => {
@@ -3790,10 +4032,11 @@
 	// ===== ИНИЦИАЛИЗАЦИЯ =====
 	function init() {
 		Utils.syncApiEndpoints();
-		console.log('🚀 HH.ru Auto Responder v2.0 загружен');
+		console.log('🚀 HH.ru Auto Responder v2.1 загружен');
 
 		// Загружаем конфигурацию
 		Utils.loadConfig();
+		CoverLetters.ensureMigrated();
 
 		// Проверяем конфигурацию
 		if (!CONFIG.RESUME_HASH) {
