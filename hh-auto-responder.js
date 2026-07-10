@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name           HH.ru Custom Script
 // @namespace      http://tampermonkey.net/
-// @version        1.3
-// @description    Автооткликер на HeadHunter
+// @version        2.0
+// @description    Автооткликер на HeadHunter — поиски, лимиты, ручные отклики
 // @author         Genzor
 // @match          https://hh.ru/*
+// @match          https://*.hh.ru/*
 // @icon           https://www.google.com/s2/favicons?sz=64&domain=hh.ru
 // @grant          none
 // ==/UserScript==
@@ -17,14 +18,15 @@
 		RESUME_HASH: '', // ⚠️ ОБЯЗАТЕЛЬНО заполнить хеш резюме!
 		COVER_LETTER_TEMPLATE: ``, // ЖЕЛАТЕЛЬНО написать сопроводительное письмо.
 
-		// API endpoints (внутренние hh.ru — публичный api.hh.ru с декабря 2025 отдаёт 403)
-		VACANCY_API_URL: 'https://hh.ru/applicant/vacancy_response/popup',
-		VACANCY_POPUP_API: 'https://hh.ru/applicant/vacancy_response/popup',
-		RESUMES_API: 'https://hh.ru/shards/applicant/resumes',
-		RESUMES_PAGE_API: 'https://hh.ru/applicant/resumes',
+		// API endpoints — origin подставляется при инициализации (поддержка nazran.hh.ru и др.)
+		VACANCY_API_URL: '',
+		VACANCY_POPUP_API: '',
+		RESUMES_API: '',
+		RESUMES_PAGE_API: '',
 
 		// Настройки
 		MAX_RESPONSES_PER_DAY: 200,
+		MAX_RESPONSES_PER_SESSION: 50,
 		DELAY_BETWEEN_RESPONSES: 3000, // 3 секунды
 		DELAY_BETWEEN_PAGES: 5000, // 5 секунд
 		MAX_RETRIES: 3,
@@ -40,6 +42,9 @@
 
 		// LocalStorage keys
 		FILTER_URL_KEY: 'hh_filter_url',
+		SAVED_SEARCHES_KEY: 'hh_saved_searches',
+		SELECTED_SEARCH_KEY: 'hh_selected_search_id',
+		MANUAL_QUEUE_KEY: 'hh_manual_queue',
 		LOG_KEY: 'hh_api_log',
 		SENT_RESPONSES_KEY: 'hh_sent_responses',
 		STATS_KEY: 'hh_stats',
@@ -61,7 +66,7 @@
 		totalPauseTime: 0,
 		uiCollapsed: false,
 		modalVisible: true,
-		settingsVisible: false,
+		modalTab: 'responses',
 		currentVacancy: null,
 		consecutiveFailures: 0,
 		consecutiveAlreadyApplied: 0,
@@ -88,6 +93,47 @@
 
 		randomDelay: (min, max) => Utils.delay(Math.random() * (max - min) + min),
 
+		getHhOrigin: () => {
+			try {
+				if (/(\.|^)hh\.ru$/i.test(window.location.hostname)) {
+					return window.location.origin;
+				}
+			} catch {
+				// ignore
+			}
+			return 'https://hh.ru';
+		},
+
+		syncApiEndpoints: () => {
+			const origin = Utils.getHhOrigin();
+			CONFIG.VACANCY_API_URL = `${origin}/applicant/vacancy_response/popup`;
+			CONFIG.VACANCY_POPUP_API = `${origin}/applicant/vacancy_response/popup`;
+			CONFIG.RESUMES_API = `${origin}/shards/applicant/resumes`;
+			CONFIG.RESUMES_PAGE_API = `${origin}/applicant/resumes`;
+		},
+
+		resolveVacancyUrl: (vacancyId) => `${Utils.getHhOrigin()}/vacancy/${vacancyId}`,
+
+		resolveFullUrl: (url) => {
+			if (!url) return '';
+			if (url.startsWith('http://') || url.startsWith('https://')) return url;
+			return `${Utils.getHhOrigin()}${url.startsWith('/') ? '' : '/'}${url}`;
+		},
+
+		getSessionLimit: () => {
+			const limit = parseInt(CONFIG.MAX_RESPONSES_PER_SESSION, 10);
+			if (!limit || limit < 1) return CONFIG.MAX_RESPONSES_PER_DAY;
+			return Math.min(limit, CONFIG.MAX_RESPONSES_PER_DAY);
+		},
+
+		shouldStopSession: () => {
+			return (
+				!STATE.isRunning ||
+				STATE.responsesCount >= Utils.getSessionLimit() ||
+				STATE.responsesCount >= CONFIG.MAX_RESPONSES_PER_DAY
+			);
+		},
+
 		validateUrl: (url) => {
 			try {
 				const urlObj = new URL(url);
@@ -105,7 +151,7 @@
 			const path = window.location.pathname;
 
 			// Главная страница HH.ru
-			if (path === '/' || path === '' || url === 'https://hh.ru/' || url === 'https://www.hh.ru/') {
+			if (path === '/' || path === '') {
 				return 'home';
 			}
 
@@ -343,7 +389,7 @@
 							href:
 								vacancy.links?.desktop ||
 								vacancy.alternateUrl ||
-								`https://hh.ru/vacancy/${vacancyId}`,
+								Utils.resolveVacancyUrl(vacancyId),
 							alreadyApplied: Array.isArray(vacancy.userLabels) && vacancy.userLabels.length > 0,
 							hasTest: Boolean(vacancy.userTestPresent),
 						};
@@ -941,6 +987,172 @@
 		},
 	};
 
+	const SEARCH_PRESETS = [
+		{
+			id: 'preset-devops',
+			name: 'DevOps · Москва',
+			url: '/search/vacancy?text=devops&area=1&search_field=name&items_on_page=20',
+			isPreset: true,
+		},
+		{
+			id: 'preset-python-remote',
+			name: 'Python · удалёнка',
+			url: '/search/vacancy?text=python&area=113&schedule=remote&search_field=name&items_on_page=20',
+			isPreset: true,
+		},
+		{
+			id: 'preset-backend',
+			name: 'Backend · Россия',
+			url: '/search/vacancy?text=backend&area=113&search_field=name&items_on_page=20',
+			isPreset: true,
+		},
+	];
+
+	const SavedSearches = {
+		getCustom: () => {
+			try {
+				const items = JSON.parse(localStorage.getItem(CONFIG.SAVED_SEARCHES_KEY) || '[]');
+				return Array.isArray(items) ? items : [];
+			} catch {
+				return [];
+			}
+		},
+
+		saveCustom: (items) => {
+			localStorage.setItem(CONFIG.SAVED_SEARCHES_KEY, JSON.stringify(items));
+		},
+
+		getSelectableOptions: () => {
+			const custom = SavedSearches.getCustom();
+			if (custom.length > 0) return custom;
+			return SEARCH_PRESETS;
+		},
+
+		getSelectedId: () => localStorage.getItem(CONFIG.SELECTED_SEARCH_KEY) || '',
+
+		setSelectedId: (id) => {
+			if (id) localStorage.setItem(CONFIG.SELECTED_SEARCH_KEY, id);
+			else localStorage.removeItem(CONFIG.SELECTED_SEARCH_KEY);
+		},
+
+		findById: (id) => {
+			if (!id || id === '__current__') return null;
+			return (
+				SavedSearches.getCustom().find((item) => item.id === id) ||
+				SEARCH_PRESETS.find((item) => item.id === id)
+			);
+		},
+
+		getUrlById: (id) => {
+			if (id === '__current__') return window.location.href;
+			const item = SavedSearches.findById(id);
+			return item ? Utils.resolveFullUrl(item.url) : '';
+		},
+
+		add: (name, url) => {
+			const trimmedName = name?.trim();
+			const trimmedUrl = url?.trim();
+			if (!trimmedName || !trimmedUrl) return null;
+
+			const items = SavedSearches.getCustom();
+			const entry = {
+				id: `search-${Date.now()}`,
+				name: trimmedName,
+				url: trimmedUrl.startsWith('http') ? trimmedUrl : Utils.resolveFullUrl(trimmedUrl),
+				isPreset: false,
+			};
+			items.unshift(entry);
+			SavedSearches.saveCustom(items);
+			SavedSearches.setSelectedId(entry.id);
+			return entry;
+		},
+
+		remove: (id) => {
+			const items = SavedSearches.getCustom().filter((item) => item.id !== id);
+			SavedSearches.saveCustom(items);
+			if (SavedSearches.getSelectedId() === id) {
+				const next = items[0]?.id || SEARCH_PRESETS[0]?.id || '__current__';
+				SavedSearches.setSelectedId(next);
+			}
+		},
+
+		suggestNameFromUrl: (url) => {
+			try {
+				const urlObj = new URL(url);
+				const text = urlObj.searchParams.get('text');
+				const area = urlObj.searchParams.get('area');
+				if (text && area) return `${text} · area ${area}`;
+				if (text) return text;
+			} catch {
+				// ignore
+			}
+			return 'Мой поиск';
+		},
+
+		resolveActiveUrl: (preferredId) => {
+			const pageType = Utils.detectPageType();
+			const selectEl = document.getElementById('hh-search-select');
+			const selectedId = preferredId || selectEl?.value || SavedSearches.getSelectedId();
+
+			if (selectedId === '__current__' || (!selectedId && pageType === 'search')) {
+				return window.location.href;
+			}
+
+			if (selectedId) {
+				const url = SavedSearches.getUrlById(selectedId);
+				if (url) return url;
+			}
+
+			return Utils.resolveProcessUrl('');
+		},
+	};
+
+	const ManualQueue = {
+		getAll: () => {
+			try {
+				const items = JSON.parse(localStorage.getItem(CONFIG.MANUAL_QUEUE_KEY) || '[]');
+				return Array.isArray(items) ? items : [];
+			} catch {
+				return [];
+			}
+		},
+
+		save: (items) => {
+			localStorage.setItem(CONFIG.MANUAL_QUEUE_KEY, JSON.stringify(items));
+		},
+
+		add: (entry) => {
+			if (!entry?.id) return;
+			const items = ManualQueue.getAll();
+			if (items.some((item) => item.id === entry.id)) return;
+
+			items.unshift({
+				id: String(entry.id),
+				title: entry.title || 'Вакансия',
+				reason: entry.reason || 'Требуется ручной отклик',
+				href: entry.href || Utils.resolveVacancyUrl(entry.id),
+				time: entry.time || new Date().toISOString(),
+			});
+
+			if (items.length > 200) items.length = 200;
+			ManualQueue.save(items);
+			UI.updateManualTab?.();
+		},
+
+		remove: (id) => {
+			ManualQueue.save(ManualQueue.getAll().filter((item) => item.id !== id));
+			UI.updateManualTab?.();
+		},
+
+		clear: () => {
+			if (confirm('Очистить список вакансий для ручного отклика?')) {
+				localStorage.removeItem(CONFIG.MANUAL_QUEUE_KEY);
+				UI.updateManualTab?.();
+				UI.showNotification('Очищено', 'Список ручных откликов пуст', 'success');
+			}
+		},
+	};
+
 	// ===== UI МОДУЛЬ =====
 	const UI = {
 		createModal: () => {
@@ -1102,6 +1314,72 @@
 							font-weight: 700;
 							color: #1e40af;
 						}
+						.modal-progress {
+							margin-top: 6px;
+							font-size: 12px;
+							color: #64748b;
+							font-weight: 500;
+						}
+						.modal-tabs {
+							display: flex;
+							gap: 8px;
+							margin-bottom: 16px;
+							border-bottom: 1px solid #e2e8f0;
+							padding-bottom: 8px;
+						}
+						.modal-tab {
+							flex: 1;
+							border: none;
+							background: transparent;
+							padding: 10px 12px;
+							border-radius: 10px;
+							font-size: 13px;
+							font-weight: 600;
+							color: #64748b;
+							cursor: pointer;
+							transition: all 0.2s ease;
+						}
+						.modal-tab.active {
+							background: #eff6ff;
+							color: #1d4ed8;
+						}
+						.modal-badge {
+							display: inline-flex;
+							min-width: 18px;
+							height: 18px;
+							padding: 0 6px;
+							border-radius: 999px;
+							background: #e2e8f0;
+							color: #475569;
+							font-size: 11px;
+							align-items: center;
+							justify-content: center;
+							margin-left: 4px;
+						}
+						.modal-tab.active .modal-badge {
+							background: #dbeafe;
+							color: #1d4ed8;
+						}
+						.manual-hint {
+							font-size: 13px;
+							color: #64748b;
+							margin-bottom: 12px;
+							line-height: 1.5;
+						}
+						.manual-actions {
+							display: flex;
+							gap: 8px;
+							margin-left: auto;
+						}
+						.manual-remove {
+							border: none;
+							background: #fee2e2;
+							color: #b91c1c;
+							border-radius: 8px;
+							padding: 4px 8px;
+							cursor: pointer;
+							font-size: 12px;
+						}
 						@media (max-width: 600px) {
 							#hh-api-modal {
 								width: 90%;
@@ -1111,13 +1389,27 @@
 						}
 					</style>
 					<div class="modal-header">
-						<h3 class="modal-title">📤 Отправленные отклики</h3>
+						<div>
+							<h3 class="modal-title">📤 Отклики</h3>
+							<div id="hh-modal-progress" class="modal-progress" style="display:none;"></div>
+						</div>
 						<button class="modal-close">×</button>
 					</div>
-					<ul class="log-list"></ul>
-					<div class="stats-container">
-						<div class="stats-title">📊 Статистика</div>
-						<div class="stats-grid"></div>
+					<div class="modal-tabs">
+						<button type="button" class="modal-tab active" data-tab="responses">История</button>
+						<button type="button" class="modal-tab" data-tab="manual">Вручную <span id="hh-manual-badge" class="modal-badge">0</span></button>
+					</div>
+					<div id="hh-tab-responses" class="modal-tab-panel">
+						<ul class="log-list"></ul>
+						<div class="stats-container">
+							<div class="stats-title">📊 Статистика</div>
+							<div class="stats-grid"></div>
+						</div>
+					</div>
+					<div id="hh-tab-manual" class="modal-tab-panel" style="display:none;">
+						<div class="manual-hint">Вакансии с тестом или обязательным письмом — откликнитесь сами.</div>
+						<ul id="hh-manual-list" class="log-list"></ul>
+						<button type="button" id="hh-manual-clear" class="hh-btn-ghost" style="width:100%;margin-top:12px;">Очистить список</button>
 					</div>
 				`;
 
@@ -1127,6 +1419,13 @@
 					modal.style.display = 'none';
 				};
 
+				modal.querySelectorAll('.modal-tab').forEach((tab) => {
+					tab.onclick = () => UI.switchModalTab(tab.dataset.tab);
+				});
+
+				const manualClearBtn = modal.querySelector('#hh-manual-clear');
+				if (manualClearBtn) manualClearBtn.onclick = () => ManualQueue.clear();
+
 				document.body.appendChild(modal);
 			} else {
 				modal.style.display = STATE.modalVisible ? 'block' : 'none';
@@ -1134,9 +1433,101 @@
 			return modal;
 		},
 
+		switchModalTab: (tabName) => {
+			STATE.modalTab = tabName;
+			const modal = document.getElementById('hh-api-modal');
+			if (!modal) return;
+
+			modal.querySelectorAll('.modal-tab').forEach((tab) => {
+				tab.classList.toggle('active', tab.dataset.tab === tabName);
+			});
+
+			const responsesPanel = modal.querySelector('#hh-tab-responses');
+			const manualPanel = modal.querySelector('#hh-tab-manual');
+			if (responsesPanel) responsesPanel.style.display = tabName === 'responses' ? 'block' : 'none';
+			if (manualPanel) manualPanel.style.display = tabName === 'manual' ? 'block' : 'none';
+
+			if (tabName === 'manual') UI.updateManualTab();
+		},
+
+		updateManualTab: () => {
+			const modal = document.getElementById('hh-api-modal');
+			if (!modal) return;
+
+			const list = modal.querySelector('#hh-manual-list');
+			const badge = modal.querySelector('#hh-manual-badge');
+			const items = ManualQueue.getAll();
+
+			if (badge) badge.textContent = String(items.length);
+			if (!list) return;
+
+			list.innerHTML = '';
+			if (items.length === 0) {
+				const empty = document.createElement('li');
+				empty.className = 'log-item';
+				empty.style.cssText = 'justify-content:center;color:#94a3b8;';
+				empty.textContent = 'Пока пусто — сюда попадут вакансии с тестами';
+				list.appendChild(empty);
+				return;
+			}
+
+			items.forEach((item) => {
+				const li = document.createElement('li');
+				li.className = 'log-item';
+
+				const symbol = document.createElement('span');
+				symbol.className = 'log-symbol';
+				symbol.textContent = '📝';
+
+				const link = document.createElement('a');
+				link.className = 'log-link';
+				link.href = item.href;
+				link.target = '_blank';
+				link.textContent = `${item.title} (${item.reason})`;
+
+				const actions = document.createElement('div');
+				actions.className = 'manual-actions';
+
+				const time = document.createElement('span');
+				time.className = 'log-time';
+				time.textContent = new Date(item.time).toLocaleDateString();
+
+				const removeBtn = document.createElement('button');
+				removeBtn.type = 'button';
+				removeBtn.className = 'manual-remove';
+				removeBtn.textContent = '✕';
+				removeBtn.onclick = () => ManualQueue.remove(item.id);
+
+				actions.appendChild(time);
+				actions.appendChild(removeBtn);
+				li.appendChild(symbol);
+				li.appendChild(link);
+				li.appendChild(actions);
+				list.appendChild(li);
+			});
+		},
+
+		updateRunProgress: () => {
+			const progress = document.getElementById('hh-modal-progress');
+			if (!progress) return;
+
+			if (!STATE.isRunning) {
+				progress.style.display = 'none';
+				return;
+			}
+
+			progress.style.display = 'block';
+			const searchName =
+				document.getElementById('hh-search-select')?.selectedOptions?.[0]?.textContent?.trim() ||
+				'поиск';
+			progress.textContent = `${STATE.responsesCount} / ${Utils.getSessionLimit()} · ${searchName}${
+				STATE.currentVacancy ? ` · ${STATE.currentVacancy}` : ''
+			}`;
+		},
+
 		updateModal: (entry) => {
 			const modal = UI.createModal();
-			const list = modal.querySelector('.log-list');
+			const list = modal.querySelector('#hh-tab-responses .log-list');
 			const statsGrid = modal.querySelector('.stats-grid');
 
 			if (!list) return;
@@ -1155,7 +1546,7 @@
 					const symbol = entry.success ? '✅' : '❌';
 					const a = document.createElement('a');
 					a.className = 'log-link';
-					a.href = `https://hh.ru/vacancy/${entry.id}`;
+					a.href = Utils.resolveVacancyUrl(entry.id);
 					a.textContent = entry.title + (entry.message ? ` (${entry.message})` : '');
 					a.target = '_blank';
 
@@ -1216,6 +1607,10 @@
 							<span class="stats-value">${formattedStats.runningTime}</span>
 						</div>
 						<div class="stats-item" style="grid-column: 1 / -1;">
+							<span class="stats-label">Лимит за запуск:</span>
+							<span class="stats-value">${STATE.responsesCount} / ${Utils.getSessionLimit()}</span>
+						</div>
+						<div class="stats-item" style="grid-column: 1 / -1;">
 							<span class="stats-label">Сегодня отправлено:</span>
 							<span class="stats-value">${Responses.getSentToday()}</span>
 						</div>
@@ -1224,6 +1619,9 @@
 			} catch (error) {
 				console.error('Ошибка обновления статистики:', error);
 			}
+
+			UI.updateManualTab();
+			UI.updateRunProgress();
 		},
 
 		showNotification: (title, message, type = 'info', duration = 4000) => {
@@ -1377,7 +1775,9 @@
 				width: 600px;
 				max-width: 90vw;
 				max-height: 80vh;
+				overflow-x: hidden;
 				overflow-y: auto;
+				box-sizing: border-box;
 				background: white;
 				border-radius: 20px;
 				box-shadow: 0 25px 80px rgba(0, 0, 0, 0.2);
@@ -1387,13 +1787,13 @@
 			`;
 
 			panel.innerHTML = `
-				<div style="padding: 32px; position: relative;">
+				<div style="padding: 32px; position: relative; overflow-x: hidden; box-sizing: border-box; max-width: 100%;">
 					<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 32px;">
 						<h2 style="margin: 0; font-size: 24px; font-weight: 700; color: #1e293b;">⚙️ Настройки</h2>
 					</div>
 					<button id="settings-close" style="position: absolute; top: 20px; right: 20px; background: rgba(255, 255, 255, 0.95); border: 1px solid #e5e7eb; font-size: 28px; cursor: pointer; color: #64748b; padding: 8px; border-radius: 8px; z-index: 10006; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);">×</button>
 
-					<div style="display: grid; gap: 24px;">
+					<div style="display: grid; gap: 24px; min-width: 0; max-width: 100%;">
 						<!-- Основные настройки -->
 						<div>
 							<h3 style="margin: 0 0 16px 0; font-size: 18px; font-weight: 600; color: #374151;">Основные настройки</h3>
@@ -1423,18 +1823,25 @@
 							</div>
 						</div>
 
+						<!-- Сохранённые поиски -->
+						<div>
+							<h3 style="margin: 0 0 16px 0; font-size: 18px; font-weight: 600; color: #374151;">Сохранённые поиски</h3>
+							<div id="hh-settings-searches" style="display: grid; gap: 8px; margin-bottom: 12px; min-width: 0; max-width: 100%; overflow: hidden;"></div>
+							<p style="margin: 0; font-size: 13px; color: #64748b; line-height: 1.5;">Управляйте поисками в панели справа или удаляйте их здесь.</p>
+						</div>
+
 						<!-- Хеш резюме -->
 						<div>
 							<h3 style="margin: 0 0 16px 0; font-size: 18px; font-weight: 600; color: #374151;">Хеш резюме</h3>
 							<input type="text" id="setting-resume-hash" value="${
 								CONFIG.RESUME_HASH
-							}" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px;" placeholder="Введите хеш вашего резюме">
+							}" style="width: 100%; max-width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px;" placeholder="Введите хеш вашего резюме">
 						</div>
 
 						<!-- Сопроводительное письмо -->
 						<div>
 							<h3 style="margin: 0 0 16px 0; font-size: 18px; font-weight: 600; color: #374151;">Сопроводительное письмо</h3>
-							<textarea id="setting-cover-letter" style="width: 100%; height: 120px; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; resize: vertical;" placeholder="Используйте {#vacancyName} для подстановки названия вакансии">${
+							<textarea id="setting-cover-letter" style="width: 100%; max-width: 100%; box-sizing: border-box; height: 120px; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; resize: vertical;" placeholder="Используйте {#vacancyName} для подстановки названия вакансии">${
 								CONFIG.COVER_LETTER_TEMPLATE
 							}</textarea>
 						</div>
@@ -1601,7 +2008,60 @@
 			};
 
 			document.body.appendChild(panel);
+			UI.renderSavedSearchesSettings(panel.querySelector('#hh-settings-searches'));
 			return panel;
+		},
+
+		renderSavedSearchesSettings: (container) => {
+			if (!container) return;
+			const items = SavedSearches.getCustom();
+
+			if (items.length === 0) {
+				container.innerHTML =
+					'<div style="padding:12px;border:1px dashed #dbe3ee;border-radius:12px;color:#64748b;font-size:13px;word-break:break-word;">Пока нет сохранённых поисков. Используйте «+ Сохранить» в панели справа.</div>';
+				return;
+			}
+
+			container.innerHTML = '';
+			items.forEach((item) => {
+				const row = document.createElement('div');
+				row.style.cssText =
+					'display:flex;align-items:center;gap:12px;padding:12px;border:1px solid #e5e7eb;border-radius:12px;background:#f8fafc;min-width:0;max-width:100%;overflow:hidden;box-sizing:border-box;';
+
+				const info = document.createElement('div');
+				info.style.cssText = 'flex:1;min-width:0;overflow:hidden;';
+
+				const title = document.createElement('div');
+				title.style.cssText =
+					'font-weight:600;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+				title.textContent = item.name;
+
+				const url = document.createElement('div');
+				url.style.cssText =
+					'font-size:12px;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+				url.textContent = item.url;
+				url.title = item.url;
+
+				info.appendChild(title);
+				info.appendChild(url);
+
+				const removeBtn = document.createElement('button');
+				removeBtn.type = 'button';
+				removeBtn.textContent = 'Удалить';
+				removeBtn.style.cssText =
+					'flex-shrink:0;border:none;background:#fee2e2;color:#b91c1c;border-radius:8px;padding:8px 12px;cursor:pointer;font-weight:600;white-space:nowrap;';
+				removeBtn.onclick = () => {
+					SavedSearches.remove(item.id);
+					UI.renderSavedSearchesSettings(container);
+					const select = document.getElementById('hh-search-select');
+					if (select) UIBuilder.refreshSearchSelect(select);
+					UI.showNotification('Удалено', `Поиск «${item.name}» удалён`, 'info');
+				};
+
+				row.appendChild(info);
+				row.appendChild(removeBtn);
+				container.appendChild(row);
+			});
 		},
 
 		saveSettings: () => {
@@ -1671,6 +2131,7 @@
 
 			Object.assign(CONFIG, {
 				RESUME_HASH: '',
+				MAX_RESPONSES_PER_SESSION: 50,
 				MIN_SALARY: 0,
 				MAX_SALARY: 0,
 				SKIP_WITHOUT_SALARY: false,
@@ -1693,6 +2154,8 @@
 		openSettings: () => {
 			STATE.settingsVisible = true;
 			UI.createSettingsPanel();
+			const panel = document.getElementById('hh-settings-panel');
+			UI.renderSavedSearchesSettings(panel?.querySelector('#hh-settings-searches'));
 		},
 
 		switchSettings: () => {
@@ -1747,7 +2210,18 @@
 			}
 
 			if (data.test?.hasTests || data.test?.required || data.test?.required === true) {
-				return { error: true, message: 'Требуется тест' };
+				return { error: true, message: 'Требуется тест', manual: true, reason: 'Требуется тест' };
+			}
+
+			if (data.letterRequired || data.letter_required) {
+				if (!CONFIG.COVER_LETTER_TEMPLATE?.trim()) {
+					return {
+						error: true,
+						message: 'Обязательное письмо',
+						manual: true,
+						reason: 'Обязательное сопроводительное',
+					};
+				}
 			}
 
 			return { error: false, data };
@@ -1771,6 +2245,7 @@
 	// ===== ОТПРАВКА ОТКЛИКА =====
 	async function respondToVacancy(vacancyId, title, retryCount = 0) {
 		STATE.currentVacancy = title;
+		UI.updateRunProgress();
 
 		try {
 			// Проверяем, не отправляли ли уже отклик
@@ -1808,6 +2283,13 @@
 			if (statusCheck.error) {
 				// Сбрасываем счетчик дубликатов при пропуске по другим причинам
 				STATE.consecutiveDuplicates = 0;
+				if (statusCheck.manual) {
+					ManualQueue.add({
+						id: vacancyId,
+						title,
+						reason: statusCheck.reason || statusCheck.message,
+					});
+				}
 				Logger.saveLog({
 					id: vacancyId,
 					title,
@@ -1884,6 +2366,11 @@
 					UI.showNotification('Лимит превышен', 'Достигнут дневной лимит откликов', 'error');
 					return;
 				} else if (errorCode === 'test-required') {
+					ManualQueue.add({
+						id: vacancyId,
+						title,
+						reason: 'Требуется тест',
+					});
 					Logger.saveLog({
 						id: vacancyId,
 						title,
@@ -2087,9 +2574,9 @@
 			for (let i = 0; i < vacancies.length; i++) {
 				const vacancyData = vacancies[i];
 				// Проверяем условия остановки
-				if (!STATE.isRunning || STATE.responsesCount >= CONFIG.MAX_RESPONSES_PER_DAY) {
+				if (!STATE.isRunning || Utils.shouldStopSession()) {
 					console.log(
-						`🛑 Остановка: isRunning=${STATE.isRunning}, responses=${STATE.responsesCount}/${CONFIG.MAX_RESPONSES_PER_DAY}`,
+						`🛑 Остановка: isRunning=${STATE.isRunning}, responses=${STATE.responsesCount}/${Utils.getSessionLimit()}`,
 					);
 					break;
 				}
@@ -2109,6 +2596,12 @@
 
 				if (vacancyData.hasTest) {
 					console.log(`⏭️ Пропускаю вакансию ${vacancyData.id}: требуется тест`);
+					ManualQueue.add({
+						id: vacancyData.id,
+						title: vacancyData.title,
+						reason: 'Требуется тест',
+						href: vacancyData.href,
+					});
 					Logger.saveLog({
 						id: vacancyData.id,
 						title: vacancyData.title,
@@ -2284,12 +2777,7 @@
 
 		console.log(`🚀 Начинаю обработку страниц с URL: ${baseUrl}`);
 
-		while (
-			hasMorePages &&
-			STATE.isRunning &&
-			STATE.responsesCount < CONFIG.MAX_RESPONSES_PER_DAY &&
-			pageNum < maxPages
-		) {
+		while (hasMorePages && STATE.isRunning && !Utils.shouldStopSession() && pageNum < maxPages) {
 			// Проверяем паузу
 			while (STATE.isPaused && STATE.isRunning) {
 				await Utils.delay(1000);
@@ -2331,8 +2819,8 @@
 			STATE.currentPage = pageNum;
 
 			// Проверяем лимиты
-			if (STATE.responsesCount >= CONFIG.MAX_RESPONSES_PER_DAY) {
-				console.log('🔚 Достигнут дневной лимит откликов.');
+			if (Utils.shouldStopSession()) {
+				console.log('🔚 Достигнут лимит откликов за запуск или дневной лимит.');
 				break;
 			}
 
@@ -2352,8 +2840,11 @@
 			`🏁 Обработка завершена. Всего страниц: ${pageNum}, откликов: ${STATE.responsesCount}`,
 		);
 
-		if (STATE.responsesCount >= CONFIG.MAX_RESPONSES_PER_DAY) {
-			console.log('🔚 Достигнут дневной лимит откликов.');
+		if (
+			STATE.responsesCount >= Utils.getSessionLimit() ||
+			STATE.responsesCount >= CONFIG.MAX_RESPONSES_PER_DAY
+		) {
+			console.log('🔚 Достигнут лимит откликов за запуск или дневной лимит.');
 		} else {
 			console.log('✅ Все доступные страницы обработаны!');
 		}
@@ -2370,7 +2861,7 @@
 		STATE.isPaused = false;
 		STATE.currentVacancy = null;
 
-		// Очищаем интервал автосохранения, если он был создан
+		UI.updateRunProgress();
 		// (хотя на самом деле он должен работать постоянно, но на всякий случай)
 
 		const btn = document.getElementById('hh-api-button');
@@ -2635,12 +3126,12 @@
 			`;
 
 			// Создаем элементы интерфейса
-			const input = UIBuilder.createUrlInput();
+			const controlPanel = UIBuilder.createControlPanel();
 			const mainButton = UIBuilder.createMainButton();
 			const pauseButton = UIBuilder.createPauseButton();
 			const controlButtons = UIBuilder.createControlButtons();
 
-			uiContainer.appendChild(input);
+			uiContainer.appendChild(controlPanel);
 			uiContainer.appendChild(mainButton);
 			uiContainer.appendChild(pauseButton);
 			uiContainer.appendChild(controlButtons);
@@ -2664,91 +3155,248 @@
 			UIBuilder.updateFloatingButtonText();
 		},
 
-		createUrlInput: () => {
-			const pageType = Utils.detectPageType();
-			let placeholder = 'Откройте поиск с фильтрами и запустите оттуда';
-			let isDisabled = false;
-			let defaultValue = '';
+		createControlPanel: () => {
+			UIBuilder.injectPanelStyles();
 
-			if (pageType === 'vacancy') {
-				const vacancyData = Utils.getCurrentVacancyData();
-				if (vacancyData) {
-					placeholder = `Текущая вакансия: ${vacancyData.title}`;
-					isDisabled = true;
-					defaultValue = window.location.href;
-				} else {
-					placeholder = 'Не удалось определить вакансию на странице';
-					isDisabled = true;
-					defaultValue = window.location.href;
-				}
-			} else if (pageType === 'search') {
-				placeholder = 'По умолчанию используется текущий поиск. Можно вставить другую ссылку.';
-				defaultValue = window.location.href;
-			} else if (pageType === 'employer') {
-				placeholder = 'По умолчанию вакансии этого работодателя. Можно вставить другую ссылку.';
-				defaultValue = window.location.href;
-			} else if (pageType === 'collection') {
-				placeholder =
-					'Подборка /vacancies/... будет преобразована в поиск. Лучше: /search/vacancy?text=...';
-				defaultValue = window.location.href;
-			} else {
-				placeholder = 'Вставьте ссылку на поиск: hh.ru/search/vacancy?...';
-			}
-
-			const input = document.createElement('input');
-			input.type = 'text';
-			input.id = 'hh-api-filter-url';
-			input.placeholder = placeholder;
-			input.disabled = isDisabled;
-			input.style.cssText = `
-				width: 100%;
-				padding: 16px 20px;
-				border-radius: 12px;
-				border: 2px solid #e5e7eb;
-				font-family: inherit;
-				font-size: 14px;
-				background: ${isDisabled ? '#f9fafb' : '#fff'};
-				box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
-				transition: all 0.3s ease;
-				outline: none;
-				box-sizing: border-box;
-				cursor: ${isDisabled ? 'not-allowed' : 'text'};
+			const panel = document.createElement('div');
+			panel.className = 'hh-panel';
+			panel.innerHTML = `
+				<div class="hh-panel-section">
+					<div class="hh-panel-label">Поиск вакансий</div>
+					<select id="hh-search-select" class="hh-select"></select>
+					<div class="hh-panel-row">
+						<button type="button" id="hh-use-current-search" class="hh-btn-ghost">↻ Текущая страница</button>
+						<button type="button" id="hh-save-search-toggle" class="hh-btn-ghost">+ Сохранить</button>
+					</div>
+					<div id="hh-save-search-form" class="hh-inline-form" style="display:none;">
+						<input id="hh-save-search-name" class="hh-input" type="text" placeholder="Название, например DevOps Москва">
+						<button type="button" id="hh-save-search-confirm" class="hh-btn-small">OK</button>
+					</div>
+					<div id="hh-search-hint" class="hh-hint"></div>
+				</div>
+				<div class="hh-panel-section">
+					<div class="hh-panel-label">Лимит за запуск</div>
+					<div id="hh-limit-chips" class="hh-chips"></div>
+					<div class="hh-limit-custom">
+						<input id="hh-session-limit" class="hh-input hh-input-compact" type="number" min="1" max="200" value="${CONFIG.MAX_RESPONSES_PER_SESSION}">
+						<span class="hh-hint-inline">откликов (макс. ${CONFIG.MAX_RESPONSES_PER_DAY}/день)</span>
+					</div>
+				</div>
 			`;
 
-			input.onfocus = () => {
-				if (!isDisabled) {
-					input.style.borderColor = '#3b82f6';
-					input.style.boxShadow = '0 0 0 4px rgba(59, 130, 246, 0.1)';
+			UIBuilder.refreshSearchSelect(panel.querySelector('#hh-search-select'));
+			UIBuilder.renderLimitChips(panel.querySelector('#hh-limit-chips'));
+
+			const pageType = Utils.detectPageType();
+			const hint = panel.querySelector('#hh-search-hint');
+			if (hint) {
+				if (SavedSearches.getCustom().length === 0) {
+					hint.textContent =
+						'Показаны примеры поисков — сохраните свой или выберите текущую страницу';
+				} else if (pageType === 'search') {
+					hint.textContent = 'Можно выбрать сохранённый поиск или текущую страницу';
+				} else {
+					hint.textContent = 'Выберите сохранённый поиск перед запуском';
 				}
-			};
-
-			input.onblur = () => {
-				if (!isDisabled) {
-					const storedUrl = localStorage.getItem(CONFIG.FILTER_URL_KEY);
-					input.style.borderColor = input.value === storedUrl ? '#10b981' : '#e5e7eb';
-					input.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.05)';
-				}
-			};
-
-			// Автосохранение с debounce (только если не disabled)
-			if (!isDisabled) {
-				const saveUrl = Utils.debounce(() => {
-					localStorage.setItem(CONFIG.FILTER_URL_KEY, input.value);
-					input.style.borderColor = '#10b981';
-				}, 500);
-
-				input.oninput = saveUrl;
-
-				input.value = defaultValue;
-				if (defaultValue) {
-					input.style.borderColor = '#10b981';
-				}
-			} else {
-				input.value = defaultValue || window.location.href;
-				input.style.borderColor = '#10b981';
 			}
 
-			return input;
+			if (pageType === 'vacancy') {
+				panel.style.opacity = '0.65';
+				panel.style.pointerEvents = 'none';
+			}
+
+			const select = panel.querySelector('#hh-search-select');
+			if (select) {
+				select.onchange = () => {
+					SavedSearches.setSelectedId(select.value);
+				};
+			}
+
+			const useCurrentBtn = panel.querySelector('#hh-use-current-search');
+			if (useCurrentBtn) {
+				useCurrentBtn.onclick = () => {
+					if (select) {
+						select.value = '__current__';
+						SavedSearches.setSelectedId('__current__');
+					}
+					UI.showNotification('Выбрано', 'Будет использована текущая страница', 'info', 2500);
+				};
+			}
+
+			const saveToggle = panel.querySelector('#hh-save-search-toggle');
+			const saveForm = panel.querySelector('#hh-save-search-form');
+			const saveName = panel.querySelector('#hh-save-search-name');
+			const saveConfirm = panel.querySelector('#hh-save-search-confirm');
+
+			if (saveToggle && saveForm) {
+				saveToggle.onclick = () => {
+					const visible = saveForm.style.display !== 'none';
+					saveForm.style.display = visible ? 'none' : 'grid';
+					if (!visible && saveName) {
+						saveName.value = SavedSearches.suggestNameFromUrl(window.location.href);
+						saveName.focus();
+					}
+				};
+			}
+
+			if (saveConfirm && saveName && saveForm) {
+				saveConfirm.onclick = () => {
+					const url =
+						select?.value === '__current__' || Utils.detectPageType() === 'search'
+							? window.location.href
+							: SavedSearches.getUrlById(select?.value || '');
+					const entry = SavedSearches.add(saveName.value, url);
+					if (!entry) {
+						UI.showNotification('Ошибка', 'Укажите название поиска', 'error');
+						return;
+					}
+					saveForm.style.display = 'none';
+					UIBuilder.refreshSearchSelect(select, entry.id);
+					if (hint) hint.textContent = 'Поиск сохранён — он появится в списке';
+					UI.showNotification('Сохранено', `Поиск «${entry.name}» добавлен`, 'success');
+				};
+			}
+
+			const limitInput = panel.querySelector('#hh-session-limit');
+			if (limitInput) {
+				limitInput.onchange = () => {
+					const value = parseInt(limitInput.value, 10) || CONFIG.MAX_RESPONSES_PER_SESSION;
+					CONFIG.MAX_RESPONSES_PER_SESSION = Math.min(
+						Math.max(value, 1),
+						CONFIG.MAX_RESPONSES_PER_DAY,
+					);
+					limitInput.value = CONFIG.MAX_RESPONSES_PER_SESSION;
+					UIBuilder.renderLimitChips(panel.querySelector('#hh-limit-chips'));
+					Utils.saveConfig();
+				};
+			}
+
+			return panel;
+		},
+
+		injectPanelStyles: () => {
+			if (document.getElementById('hh-panel-styles')) return;
+			const style = document.createElement('style');
+			style.id = 'hh-panel-styles';
+			style.textContent = `
+				.hh-panel {
+					display: grid;
+					gap: 12px;
+					padding: 16px;
+					border-radius: 16px;
+					background: rgba(255,255,255,0.98);
+					border: 1px solid #e5e7eb;
+					box-shadow: 0 8px 24px rgba(15,23,42,0.08);
+				}
+				.hh-panel-section { display: grid; gap: 10px; }
+				.hh-panel-label {
+					font-size: 12px;
+					font-weight: 700;
+					letter-spacing: 0.04em;
+					text-transform: uppercase;
+					color: #64748b;
+				}
+				.hh-panel-row { display: flex; gap: 8px; }
+				.hh-select, .hh-input {
+					width: 100%;
+					box-sizing: border-box;
+					border: 1px solid #dbe3ee;
+					border-radius: 12px;
+					padding: 12px 14px;
+					font: inherit;
+					font-size: 14px;
+					background: #fff;
+					color: #0f172a;
+					outline: none;
+				}
+				.hh-select:focus, .hh-input:focus {
+					border-color: #3b82f6;
+					box-shadow: 0 0 0 4px rgba(59,130,246,0.12);
+				}
+				.hh-input-compact { max-width: 88px; padding: 10px 12px; }
+				.hh-btn-ghost, .hh-btn-small {
+					border: 1px solid #dbe3ee;
+					background: #f8fafc;
+					color: #334155;
+					border-radius: 10px;
+					padding: 10px 12px;
+					font: inherit;
+					font-size: 13px;
+					font-weight: 600;
+					cursor: pointer;
+					transition: all 0.2s ease;
+				}
+				.hh-btn-ghost { flex: 1; }
+				.hh-btn-small { min-width: 52px; }
+				.hh-btn-ghost:hover, .hh-btn-small:hover { background: #eff6ff; border-color: #93c5fd; color: #1d4ed8; }
+				.hh-inline-form { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+				.hh-hint, .hh-hint-inline { font-size: 12px; color: #64748b; line-height: 1.45; }
+				.hh-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+				.hh-chip {
+					border: 1px solid #dbe3ee;
+					background: #fff;
+					color: #475569;
+					border-radius: 999px;
+					padding: 8px 12px;
+					font-size: 13px;
+					font-weight: 600;
+					cursor: pointer;
+				}
+				.hh-chip.active { background: #1d4ed8; border-color: #1d4ed8; color: #fff; }
+				.hh-limit-custom { display: flex; align-items: center; gap: 10px; }
+			`;
+			document.head.appendChild(style);
+		},
+
+		refreshSearchSelect: (selectEl, forceId) => {
+			if (!selectEl) return;
+			const options = SavedSearches.getSelectableOptions();
+			const pageType = Utils.detectPageType();
+			const selectedId =
+				forceId ||
+				SavedSearches.getSelectedId() ||
+				(pageType === 'search' ? '__current__' : options[0]?.id);
+
+			selectEl.innerHTML = '';
+
+			if (pageType !== 'vacancy') {
+				const currentOption = document.createElement('option');
+				currentOption.value = '__current__';
+				currentOption.textContent = '↻ Текущая страница';
+				selectEl.appendChild(currentOption);
+			}
+
+			options.forEach((item) => {
+				const option = document.createElement('option');
+				option.value = item.id;
+				option.textContent = item.isPreset ? `${item.name} · пример` : item.name;
+				selectEl.appendChild(option);
+			});
+
+			const hasSelected = Array.from(selectEl.options).some((opt) => opt.value === selectedId);
+			selectEl.value = hasSelected ? selectedId : selectEl.options[0]?.value || '';
+			SavedSearches.setSelectedId(selectEl.value);
+		},
+
+		renderLimitChips: (container) => {
+			if (!container) return;
+			const presets = [10, 30, 50, 100, 200];
+			container.innerHTML = '';
+
+			presets.forEach((value) => {
+				const chip = document.createElement('button');
+				chip.type = 'button';
+				chip.className = `hh-chip${CONFIG.MAX_RESPONSES_PER_SESSION === value ? ' active' : ''}`;
+				chip.textContent = String(value);
+				chip.onclick = () => {
+					CONFIG.MAX_RESPONSES_PER_SESSION = Math.min(value, CONFIG.MAX_RESPONSES_PER_DAY);
+					const limitInput = document.getElementById('hh-session-limit');
+					if (limitInput) limitInput.value = CONFIG.MAX_RESPONSES_PER_SESSION;
+					UIBuilder.renderLimitChips(container);
+					Utils.saveConfig();
+				};
+				container.appendChild(chip);
+			});
 		},
 
 		createMainButton: () => {
@@ -2826,8 +3474,7 @@
 					return;
 				}
 
-				const inputEl = document.getElementById('hh-api-filter-url');
-				const rawUrl = Utils.resolveProcessUrl(inputEl?.value || '');
+				const rawUrl = SavedSearches.resolveActiveUrl();
 
 				if (!rawUrl) {
 					UI.showNotification(
@@ -3008,7 +3655,8 @@
 
 	// ===== ИНИЦИАЛИЗАЦИЯ =====
 	function init() {
-		console.log('🚀 HH.ru Auto Responder v1.3 загружен');
+		Utils.syncApiEndpoints();
+		console.log('🚀 HH.ru Auto Responder v2.0 загружен');
 
 		// Загружаем конфигурацию
 		Utils.loadConfig();
