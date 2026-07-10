@@ -2474,7 +2474,7 @@
 									<button type="button" id="setting-filter-profile-delete" style="flex-shrink:0;padding:10px 12px;border:1px solid #fecaca;background:#fff;color:#dc2626;border-radius:10px;cursor:pointer;font-weight:600;">Удалить</button>
 								</div>
 								<input type="text" id="setting-filter-profile-name" class="hh-input" placeholder="Название профиля, например Senior / без фильтров">
-								<p style="margin:0;font-size:13px;color:#64748b;line-height:1.5;">Переключайте профили здесь или в панели справа. Изменения полей ниже сохраняются в активный профиль.</p>
+								<p style="margin:0;font-size:13px;color:#64748b;line-height:1.5;">Изменения полей ниже сохраняются в активный профиль.</p>
 							</div>
 						</div>
 
@@ -2634,7 +2634,6 @@
 				FilterProfiles.setSelectedId(id);
 				FilterProfiles.applyActive();
 				UI.fillFilterFields(panel);
-				UIBuilder.refreshFilterProfileSelect(document.getElementById('hh-filter-profile-select'));
 				Utils.saveConfig();
 				const active = FilterProfiles.getActive();
 				UI.showNotification('Фильтры', `Профиль «${active?.name || ''}»`, 'info', 2000);
@@ -2642,7 +2641,6 @@
 			panel.querySelector('#setting-filter-profile-name').onchange = () => {
 				UI.persistActiveFilterProfileFromSettings(panel);
 				UI.refreshFilterProfileSettings(panel);
-				UIBuilder.refreshFilterProfileSelect(document.getElementById('hh-filter-profile-select'));
 				Utils.saveConfig();
 			};
 			panel.querySelector('#setting-filter-profile-add').onclick = () => {
@@ -2654,10 +2652,6 @@
 					return;
 				}
 				UI.refreshFilterProfileSettings(panel);
-				UIBuilder.refreshFilterProfileSelect(
-					document.getElementById('hh-filter-profile-select'),
-					entry.id,
-				);
 				Utils.saveConfig();
 				UI.showNotification('Добавлено', `Профиль «${entry.name}» создан`, 'success');
 			};
@@ -2671,7 +2665,6 @@
 				if (!active || !confirm(`Удалить профиль «${active.name}»?`)) return;
 				FilterProfiles.remove(active.id);
 				UI.refreshFilterProfileSettings(panel);
-				UIBuilder.refreshFilterProfileSelect(document.getElementById('hh-filter-profile-select'));
 				Utils.saveConfig();
 				UI.showNotification('Удалено', `Профиль «${active.name}» удалён`, 'info');
 			};
@@ -2895,10 +2888,6 @@
 				name,
 				...FilterProfiles.snapshotFromConfig(),
 			});
-			UIBuilder.refreshFilterProfileSelect(
-				document.getElementById('hh-filter-profile-select'),
-				active.id,
-			);
 		},
 
 		refreshSavedSearchesSettings: () => {
@@ -3168,7 +3157,6 @@
 				UI.createSettingsPanel();
 			}
 			UIBuilder.refreshLetterSelect(document.getElementById('hh-letter-select'));
-			UIBuilder.refreshFilterProfileSelect(document.getElementById('hh-filter-profile-select'));
 			UIBuilder.renderSpeedModeChips(document.getElementById('hh-speed-chips'));
 			UIBuilder.renderLimitChips(document.getElementById('hh-limit-chips'));
 		},
@@ -4231,11 +4219,6 @@
 					<div id="hh-letter-hint" class="hh-hint"></div>
 				</div>
 				<div class="hh-panel-section">
-					<div class="hh-panel-label">Профиль фильтров</div>
-					<select id="hh-filter-profile-select" class="hh-select"></select>
-					<div id="hh-filter-profile-hint" class="hh-hint"></div>
-				</div>
-				<div class="hh-panel-section">
 					<div class="hh-panel-label">Режим скорости</div>
 					<div id="hh-speed-chips" class="hh-chips"></div>
 					<div id="hh-speed-hint" class="hh-hint"></div>
@@ -4252,7 +4235,6 @@
 
 			UIBuilder.refreshSearchSelect(panel.querySelector('#hh-search-select'));
 			UIBuilder.refreshLetterSelect(panel.querySelector('#hh-letter-select'));
-			UIBuilder.refreshFilterProfileSelect(panel.querySelector('#hh-filter-profile-select'));
 			UIBuilder.renderSpeedModeChips(panel.querySelector('#hh-speed-chips'));
 			UIBuilder.renderLimitChips(panel.querySelector('#hh-limit-chips'));
 			UIBuilder.syncRandomLetterUI(panel);
@@ -4312,19 +4294,6 @@
 						'info',
 						2500,
 					);
-				};
-			}
-
-			const filterProfileSelect = panel.querySelector('#hh-filter-profile-select');
-			if (filterProfileSelect) {
-				filterProfileSelect.onchange = () => {
-					FilterProfiles.setSelectedId(filterProfileSelect.value);
-					FilterProfiles.applyActive();
-					UI.refreshFilterProfileSettings(document.getElementById('hh-settings-panel'));
-					UIBuilder.refreshFilterProfileSelect(filterProfileSelect, filterProfileSelect.value);
-					Utils.saveConfig();
-					const active = FilterProfiles.getActive();
-					UI.showNotification('Фильтры', `Профиль «${active?.name || ''}»`, 'info', 2000);
 				};
 			}
 
@@ -4723,52 +4692,6 @@
 						? preview.slice(0, 90) + (preview.length > 90 ? '…' : '')
 						: 'Пустой шаблон — письмо не будет отправлено';
 				}
-			}
-		},
-
-		refreshFilterProfileSelect: (selectEl, forceId) => {
-			if (!selectEl) return;
-			FilterProfiles.ensureMigrated();
-			const items = FilterProfiles.getAll();
-			const selectedId = forceId || FilterProfiles.getActive()?.id || items[0]?.id || '';
-
-			selectEl.innerHTML = '';
-			items.forEach((item) => {
-				const option = document.createElement('option');
-				option.value = item.id;
-				option.textContent = item.name;
-				selectEl.appendChild(option);
-			});
-
-			const hasSelected = Array.from(selectEl.options).some((opt) => opt.value === selectedId);
-			selectEl.value = hasSelected ? selectedId : selectEl.options[0]?.value || '';
-			if (selectEl.value) {
-				FilterProfiles.setSelectedId(selectEl.value);
-				FilterProfiles.applyActive();
-			}
-
-			const hint = document.getElementById('hh-filter-profile-hint');
-			if (hint) {
-				const active = FilterProfiles.getActive();
-				if (!active) {
-					hint.textContent = 'Нет профилей';
-					return;
-				}
-				if (!STATE.settings.enableFilters) {
-					hint.textContent = 'Фильтрация выключена в этом профиле';
-					return;
-				}
-				const parts = [];
-				if (active.minSalary) parts.push(`от ${active.minSalary}`);
-				if (active.maxSalary) parts.push(`до ${active.maxSalary}`);
-				if (active.requiredKeywords?.length)
-					parts.push(`обязат.: ${active.requiredKeywords.length}`);
-				if (active.excludedKeywords?.length) parts.push(`искл.: ${active.excludedKeywords.length}`);
-				if (active.blacklistCompanies?.length)
-					parts.push(`блэклист: ${active.blacklistCompanies.length}`);
-				hint.textContent = parts.length
-					? parts.join(' · ')
-					: 'Фильтры включены, без доп. ограничений';
 			}
 		},
 
