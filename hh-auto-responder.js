@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name           HH.ru Custom Script
 // @namespace      http://tampermonkey.net/
-// @version        2.2
-// @description    Автооткликер на HeadHunter — поиски, письма, экспорт настроек
+// @version        2.3
+// @description    Автооткликер на HeadHunter — поиски, письма, профили фильтров, бэкап
 // @author         Genzor
 // @match          https://hh.ru/*
 // @match          https://*.hh.ru/*
@@ -46,6 +46,8 @@
 		SELECTED_SEARCH_KEY: 'hh_selected_search_id',
 		COVER_LETTERS_KEY: 'hh_cover_letters',
 		SELECTED_LETTER_KEY: 'hh_selected_letter_id',
+		FILTER_PROFILES_KEY: 'hh_filter_profiles',
+		SELECTED_FILTER_PROFILE_KEY: 'hh_selected_filter_profile_id',
 		MANUAL_QUEUE_KEY: 'hh_manual_queue',
 		LOG_KEY: 'hh_api_log',
 		SENT_RESPONSES_KEY: 'hh_sent_responses',
@@ -1294,6 +1296,141 @@
 		},
 	};
 
+	const FilterProfiles = {
+		snapshotFromConfig: () => ({
+			enableFilters: !!STATE.settings.enableFilters,
+			minSalary: CONFIG.MIN_SALARY || 0,
+			maxSalary: CONFIG.MAX_SALARY || 0,
+			skipWithoutSalary: !!CONFIG.SKIP_WITHOUT_SALARY,
+			requiredKeywords: [...(CONFIG.REQUIRED_KEYWORDS || [])],
+			excludedKeywords: [...(CONFIG.EXCLUDED_KEYWORDS || [])],
+			blacklistCompanies: [...(CONFIG.BLACKLIST_COMPANIES || [])],
+		}),
+
+		getAll: () => {
+			try {
+				const items = JSON.parse(localStorage.getItem(CONFIG.FILTER_PROFILES_KEY) || '[]');
+				return Array.isArray(items) ? items : [];
+			} catch {
+				return [];
+			}
+		},
+
+		saveAll: (items) => {
+			localStorage.setItem(CONFIG.FILTER_PROFILES_KEY, JSON.stringify(items));
+		},
+
+		getSelectedId: () => localStorage.getItem(CONFIG.SELECTED_FILTER_PROFILE_KEY) || '',
+
+		setSelectedId: (id) => {
+			if (id) localStorage.setItem(CONFIG.SELECTED_FILTER_PROFILE_KEY, id);
+			else localStorage.removeItem(CONFIG.SELECTED_FILTER_PROFILE_KEY);
+		},
+
+		findById: (id) => FilterProfiles.getAll().find((item) => item.id === id) || null,
+
+		getActive: () => {
+			const items = FilterProfiles.getAll();
+			if (items.length === 0) return null;
+			const selectedId = FilterProfiles.getSelectedId();
+			return items.find((item) => item.id === selectedId) || items[0];
+		},
+
+		applyToConfig: (profile) => {
+			if (!profile) return;
+			STATE.settings.enableFilters = profile.enableFilters !== false;
+			CONFIG.MIN_SALARY = profile.minSalary || 0;
+			CONFIG.MAX_SALARY = profile.maxSalary || 0;
+			CONFIG.SKIP_WITHOUT_SALARY = !!profile.skipWithoutSalary;
+			CONFIG.REQUIRED_KEYWORDS = Array.isArray(profile.requiredKeywords)
+				? [...profile.requiredKeywords]
+				: [];
+			CONFIG.EXCLUDED_KEYWORDS = Array.isArray(profile.excludedKeywords)
+				? [...profile.excludedKeywords]
+				: [];
+			CONFIG.BLACKLIST_COMPANIES = Array.isArray(profile.blacklistCompanies)
+				? [...profile.blacklistCompanies]
+				: [];
+		},
+
+		applyActive: () => {
+			const active = FilterProfiles.getActive();
+			if (active) FilterProfiles.applyToConfig(active);
+		},
+
+		add: (name, data) => {
+			const trimmedName = name?.trim();
+			if (!trimmedName) return null;
+
+			const items = FilterProfiles.getAll();
+			const entry = {
+				id: `filter-${Date.now()}`,
+				name: trimmedName,
+				...(data || FilterProfiles.snapshotFromConfig()),
+			};
+			items.unshift(entry);
+			FilterProfiles.saveAll(items);
+			FilterProfiles.setSelectedId(entry.id);
+			FilterProfiles.applyToConfig(entry);
+			return entry;
+		},
+
+		update: (id, patch) => {
+			const items = FilterProfiles.getAll();
+			const index = items.findIndex((item) => item.id === id);
+			if (index === -1) return false;
+
+			const nextName = patch.name !== undefined ? String(patch.name).trim() : items[index].name;
+			if (!nextName) return false;
+
+			items[index] = {
+				...items[index],
+				...patch,
+				name: nextName,
+				id: items[index].id,
+			};
+			FilterProfiles.saveAll(items);
+			if (FilterProfiles.getSelectedId() === id) {
+				FilterProfiles.applyToConfig(items[index]);
+			}
+			return true;
+		},
+
+		persistActiveFromConfig: () => {
+			const active = FilterProfiles.getActive();
+			if (!active) return false;
+			return FilterProfiles.update(active.id, {
+				name: active.name,
+				...FilterProfiles.snapshotFromConfig(),
+			});
+		},
+
+		remove: (id) => {
+			const items = FilterProfiles.getAll().filter((item) => item.id !== id);
+			FilterProfiles.saveAll(items);
+			if (FilterProfiles.getSelectedId() === id) {
+				const next = items[0];
+				FilterProfiles.setSelectedId(next?.id || '');
+				if (next) FilterProfiles.applyToConfig(next);
+			}
+		},
+
+		ensureMigrated: () => {
+			const items = FilterProfiles.getAll();
+			if (items.length > 0) {
+				if (
+					!FilterProfiles.getSelectedId() ||
+					!FilterProfiles.findById(FilterProfiles.getSelectedId())
+				) {
+					FilterProfiles.setSelectedId(items[0].id);
+				}
+				FilterProfiles.applyActive();
+				return;
+			}
+			FilterProfiles.add('Основной', FilterProfiles.snapshotFromConfig());
+		},
+	};
+
 	const Backup = {
 		TYPE: 'hh-auto-responder-backup',
 		VERSION: 1,
@@ -1335,6 +1472,8 @@
 				selectedSearchId: SavedSearches.getSelectedId(),
 				coverLetters: CoverLetters.getAll(),
 				selectedLetterId: CoverLetters.getSelectedId(),
+				filterProfiles: FilterProfiles.getAll(),
+				selectedFilterProfileId: FilterProfiles.getSelectedId(),
 			};
 
 			if (includeHistory) {
@@ -1364,7 +1503,13 @@
 			if (data.type && data.type !== Backup.TYPE) {
 				return 'Это не бэкап HH Auto Responder';
 			}
-			if (!data.config && !data.settings && !data.savedSearches && !data.coverLetters) {
+			if (
+				!data.config &&
+				!data.settings &&
+				!data.savedSearches &&
+				!data.coverLetters &&
+				!data.filterProfiles
+			) {
 				return 'В файле нет данных для импорта';
 			}
 			return null;
@@ -1402,6 +1547,19 @@
 				CoverLetters.setSelectedId(data.selectedLetterId);
 			} else {
 				CoverLetters.syncActiveToConfig();
+			}
+
+			if (Array.isArray(data.filterProfiles)) {
+				FilterProfiles.saveAll(data.filterProfiles);
+			}
+			if (
+				typeof data.selectedFilterProfileId === 'string' &&
+				FilterProfiles.findById(data.selectedFilterProfileId)
+			) {
+				FilterProfiles.setSelectedId(data.selectedFilterProfileId);
+				FilterProfiles.applyActive();
+			} else {
+				FilterProfiles.ensureMigrated();
 			}
 
 			if (data.history && typeof data.history === 'object') {
@@ -2103,6 +2261,7 @@
 				if (STATE.settingsVisible) {
 					UI.refreshSavedSearchesSettings();
 					UI.refreshLetterSettings(panel);
+					UI.refreshFilterProfileSettings(panel);
 					UI.switchSettingsTab(STATE.settingsTab || 'general');
 					UI.bindSettingsEscape();
 				}
@@ -2229,6 +2388,20 @@
 					</div>
 
 					<div id="hh-settings-tab-filters" class="hh-settings-tab-panel" style="display:${STATE.settingsTab === 'filters' ? 'grid' : 'none'}; gap: 24px; min-width: 0; max-width: 100%;">
+						<!-- Профили фильтров -->
+						<div>
+							<h3 style="margin: 0 0 16px 0; font-size: 18px; font-weight: 600; color: #374151;">Профиль фильтров</h3>
+							<div style="display: grid; gap: 10px; min-width: 0; max-width: 100%;">
+								<div style="display: flex; gap: 8px; min-width: 0;">
+									<select id="setting-filter-profile-select" class="hh-select" style="flex:1;min-width:0;"></select>
+									<button type="button" id="setting-filter-profile-add" class="hh-btn-ghost" style="flex:0;white-space:nowrap;">+ Новый</button>
+									<button type="button" id="setting-filter-profile-delete" style="flex-shrink:0;padding:10px 12px;border:1px solid #fecaca;background:#fff;color:#dc2626;border-radius:10px;cursor:pointer;font-weight:600;">Удалить</button>
+								</div>
+								<input type="text" id="setting-filter-profile-name" class="hh-input" placeholder="Название профиля, например Senior / без фильтров">
+								<p style="margin:0;font-size:13px;color:#64748b;line-height:1.5;">Переключайте профили здесь или в панели справа. Изменения полей ниже сохраняются в активный профиль.</p>
+							</div>
+						</div>
+
 						<!-- Фильтры -->
 						<div>
 							<h3 style="margin: 0 0 16px 0; font-size: 18px; font-weight: 600; color: #374151;">Фильтры</h3>
@@ -2319,6 +2492,7 @@
 			};
 			panel.querySelector('#setting-filters').onchange = () => {
 				STATE.settings.enableFilters = panel.querySelector('#setting-filters').checked;
+				UI.persistActiveFilterProfileFromSettings(panel);
 				Utils.saveConfig();
 			};
 			panel.querySelector('#setting-random-letter').onchange = () => {
@@ -2329,14 +2503,17 @@
 
 			panel.querySelector('#setting-min-salary').onchange = () => {
 				CONFIG.MIN_SALARY = parseInt(panel.querySelector('#setting-min-salary').value) || 0;
+				UI.persistActiveFilterProfileFromSettings(panel);
 				Utils.saveConfig();
 			};
 			panel.querySelector('#setting-max-salary').onchange = () => {
 				CONFIG.MAX_SALARY = parseInt(panel.querySelector('#setting-max-salary').value) || 0;
+				UI.persistActiveFilterProfileFromSettings(panel);
 				Utils.saveConfig();
 			};
 			panel.querySelector('#setting-skip-no-salary').onchange = () => {
 				CONFIG.SKIP_WITHOUT_SALARY = panel.querySelector('#setting-skip-no-salary').checked;
+				UI.persistActiveFilterProfileFromSettings(panel);
 				Utils.saveConfig();
 			};
 
@@ -2348,6 +2525,7 @@
 							.map((s) => s.trim())
 							.filter((s) => s)
 					: [];
+				UI.persistActiveFilterProfileFromSettings(panel);
 				Utils.saveConfig();
 			};
 			panel.querySelector('#setting-excluded-keywords').onchange = () => {
@@ -2358,6 +2536,7 @@
 							.map((s) => s.trim())
 							.filter((s) => s)
 					: [];
+				UI.persistActiveFilterProfileFromSettings(panel);
 				Utils.saveConfig();
 			};
 			panel.querySelector('#setting-blacklist').onchange = () => {
@@ -2368,7 +2547,55 @@
 							.map((s) => s.trim())
 							.filter((s) => s)
 					: [];
+				UI.persistActiveFilterProfileFromSettings(panel);
 				Utils.saveConfig();
+			};
+
+			panel.querySelector('#setting-filter-profile-select').onchange = () => {
+				const id = panel.querySelector('#setting-filter-profile-select').value;
+				FilterProfiles.setSelectedId(id);
+				FilterProfiles.applyActive();
+				UI.fillFilterFields(panel);
+				UIBuilder.refreshFilterProfileSelect(document.getElementById('hh-filter-profile-select'));
+				Utils.saveConfig();
+				const active = FilterProfiles.getActive();
+				UI.showNotification('Фильтры', `Профиль «${active?.name || ''}»`, 'info', 2000);
+			};
+			panel.querySelector('#setting-filter-profile-name').onchange = () => {
+				UI.persistActiveFilterProfileFromSettings(panel);
+				UI.refreshFilterProfileSettings(panel);
+				UIBuilder.refreshFilterProfileSelect(document.getElementById('hh-filter-profile-select'));
+				Utils.saveConfig();
+			};
+			panel.querySelector('#setting-filter-profile-add').onclick = () => {
+				const name = prompt('Название профиля', `Профиль ${FilterProfiles.getAll().length + 1}`);
+				if (name === null) return;
+				const entry = FilterProfiles.add(name, FilterProfiles.snapshotFromConfig());
+				if (!entry) {
+					UI.showNotification('Ошибка', 'Укажите название профиля', 'error');
+					return;
+				}
+				UI.refreshFilterProfileSettings(panel);
+				UIBuilder.refreshFilterProfileSelect(
+					document.getElementById('hh-filter-profile-select'),
+					entry.id,
+				);
+				Utils.saveConfig();
+				UI.showNotification('Добавлено', `Профиль «${entry.name}» создан`, 'success');
+			};
+			panel.querySelector('#setting-filter-profile-delete').onclick = () => {
+				const items = FilterProfiles.getAll();
+				if (items.length <= 1) {
+					UI.showNotification('Нельзя удалить', 'Должен остаться хотя бы один профиль', 'warning');
+					return;
+				}
+				const active = FilterProfiles.getActive();
+				if (!active || !confirm(`Удалить профиль «${active.name}»?`)) return;
+				FilterProfiles.remove(active.id);
+				UI.refreshFilterProfileSettings(panel);
+				UIBuilder.refreshFilterProfileSelect(document.getElementById('hh-filter-profile-select'));
+				Utils.saveConfig();
+				UI.showNotification('Удалено', `Профиль «${active.name}» удалён`, 'info');
 			};
 
 			panel.querySelector('#setting-cover-letter').onchange = () => {
@@ -2473,6 +2700,7 @@
 			document.body.appendChild(panel);
 			UI.renderSavedSearchesSettings(panel.querySelector('#hh-settings-searches'));
 			UI.refreshLetterSettings(panel);
+			UI.refreshFilterProfileSettings(panel);
 			return panel;
 		},
 
@@ -2516,6 +2744,83 @@
 			UI.refreshLetterSettings(root);
 			UIBuilder.refreshLetterSelect(document.getElementById('hh-letter-select'), active.id);
 			Utils.saveConfig();
+		},
+
+		fillFilterFields: (panel) => {
+			if (!panel) return;
+			const active = FilterProfiles.getActive();
+			const nameInput = panel.querySelector('#setting-filter-profile-name');
+			if (nameInput) nameInput.value = active?.name || '';
+
+			const enableEl = panel.querySelector('#setting-filters');
+			const minEl = panel.querySelector('#setting-min-salary');
+			const maxEl = panel.querySelector('#setting-max-salary');
+			const skipEl = panel.querySelector('#setting-skip-no-salary');
+			const requiredEl = panel.querySelector('#setting-required-keywords');
+			const excludedEl = panel.querySelector('#setting-excluded-keywords');
+			const blacklistEl = panel.querySelector('#setting-blacklist');
+
+			if (enableEl) enableEl.checked = !!STATE.settings.enableFilters;
+			if (minEl) minEl.value = CONFIG.MIN_SALARY || 0;
+			if (maxEl) maxEl.value = CONFIG.MAX_SALARY || 0;
+			if (skipEl) skipEl.checked = !!CONFIG.SKIP_WITHOUT_SALARY;
+			if (requiredEl) requiredEl.value = (CONFIG.REQUIRED_KEYWORDS || []).join(', ');
+			if (excludedEl) excludedEl.value = (CONFIG.EXCLUDED_KEYWORDS || []).join(', ');
+			if (blacklistEl) blacklistEl.value = (CONFIG.BLACKLIST_COMPANIES || []).join(', ');
+		},
+
+		refreshFilterProfileSettings: (panel) => {
+			const root = panel || document.getElementById('hh-settings-panel');
+			if (!root) return;
+			const select = root.querySelector('#setting-filter-profile-select');
+			if (!select) return;
+
+			FilterProfiles.ensureMigrated();
+			const items = FilterProfiles.getAll();
+			const selectedId = FilterProfiles.getActive()?.id || '';
+			select.innerHTML = '';
+			items.forEach((item) => {
+				const option = document.createElement('option');
+				option.value = item.id;
+				option.textContent = item.name;
+				select.appendChild(option);
+			});
+			if (selectedId) select.value = selectedId;
+			UI.fillFilterFields(root);
+		},
+
+		persistActiveFilterProfileFromSettings: (panel) => {
+			const root = panel || document.getElementById('hh-settings-panel');
+			if (!root) return;
+			const active = FilterProfiles.getActive();
+			if (!active) return;
+
+			const name = root.querySelector('#setting-filter-profile-name')?.value || active.name;
+			STATE.settings.enableFilters = !!root.querySelector('#setting-filters')?.checked;
+			CONFIG.MIN_SALARY = parseInt(root.querySelector('#setting-min-salary')?.value, 10) || 0;
+			CONFIG.MAX_SALARY = parseInt(root.querySelector('#setting-max-salary')?.value, 10) || 0;
+			CONFIG.SKIP_WITHOUT_SALARY = !!root.querySelector('#setting-skip-no-salary')?.checked;
+
+			const parseList = (value) =>
+				value
+					? value
+							.split(',')
+							.map((s) => s.trim())
+							.filter((s) => s)
+					: [];
+
+			CONFIG.REQUIRED_KEYWORDS = parseList(root.querySelector('#setting-required-keywords')?.value);
+			CONFIG.EXCLUDED_KEYWORDS = parseList(root.querySelector('#setting-excluded-keywords')?.value);
+			CONFIG.BLACKLIST_COMPANIES = parseList(root.querySelector('#setting-blacklist')?.value);
+
+			FilterProfiles.update(active.id, {
+				name,
+				...FilterProfiles.snapshotFromConfig(),
+			});
+			UIBuilder.refreshFilterProfileSelect(
+				document.getElementById('hh-filter-profile-select'),
+				active.id,
+			);
 		},
 
 		refreshSavedSearchesSettings: () => {
@@ -2704,8 +3009,9 @@
 			CONFIG.RESUME_HASH = panel.querySelector('#setting-resume-hash').value;
 
 			UI.persistActiveLetterFromSettings(panel);
+			UI.persistActiveFilterProfileFromSettings(panel);
 			CONFIG.COVER_LETTER_TEMPLATE = CoverLetters.getActiveText();
-			Utils.saveConfig();
+			Utils.forceSaveConfig();
 
 			STATE.settingsVisible = false;
 			panel.style.display = 'none';
@@ -2769,7 +3075,10 @@
 			CoverLetters.saveAll([]);
 			CoverLetters.setSelectedId('');
 			CoverLetters.ensureMigrated();
-			Utils.saveConfig();
+			FilterProfiles.saveAll([]);
+			FilterProfiles.setSelectedId('');
+			FilterProfiles.ensureMigrated();
+			Utils.forceSaveConfig();
 
 			// Обновляем панель настроек
 			const panel = document.getElementById('hh-settings-panel');
@@ -2778,6 +3087,7 @@
 				UI.createSettingsPanel();
 			}
 			UIBuilder.refreshLetterSelect(document.getElementById('hh-letter-select'));
+			UIBuilder.refreshFilterProfileSelect(document.getElementById('hh-filter-profile-select'));
 		},
 
 		openSettings: () => {
@@ -3838,6 +4148,11 @@
 					<div id="hh-letter-hint" class="hh-hint"></div>
 				</div>
 				<div class="hh-panel-section">
+					<div class="hh-panel-label">Профиль фильтров</div>
+					<select id="hh-filter-profile-select" class="hh-select"></select>
+					<div id="hh-filter-profile-hint" class="hh-hint"></div>
+				</div>
+				<div class="hh-panel-section">
 					<div class="hh-panel-label">Лимит за запуск</div>
 					<div id="hh-limit-chips" class="hh-chips"></div>
 					<div class="hh-limit-custom">
@@ -3849,6 +4164,7 @@
 
 			UIBuilder.refreshSearchSelect(panel.querySelector('#hh-search-select'));
 			UIBuilder.refreshLetterSelect(panel.querySelector('#hh-letter-select'));
+			UIBuilder.refreshFilterProfileSelect(panel.querySelector('#hh-filter-profile-select'));
 			UIBuilder.renderLimitChips(panel.querySelector('#hh-limit-chips'));
 			UIBuilder.syncRandomLetterUI(panel);
 
@@ -3907,6 +4223,19 @@
 						'info',
 						2500,
 					);
+				};
+			}
+
+			const filterProfileSelect = panel.querySelector('#hh-filter-profile-select');
+			if (filterProfileSelect) {
+				filterProfileSelect.onchange = () => {
+					FilterProfiles.setSelectedId(filterProfileSelect.value);
+					FilterProfiles.applyActive();
+					UI.refreshFilterProfileSettings(document.getElementById('hh-settings-panel'));
+					UIBuilder.refreshFilterProfileSelect(filterProfileSelect, filterProfileSelect.value);
+					Utils.saveConfig();
+					const active = FilterProfiles.getActive();
+					UI.showNotification('Фильтры', `Профиль «${active?.name || ''}»`, 'info', 2000);
 				};
 			}
 
@@ -4306,6 +4635,52 @@
 			}
 		},
 
+		refreshFilterProfileSelect: (selectEl, forceId) => {
+			if (!selectEl) return;
+			FilterProfiles.ensureMigrated();
+			const items = FilterProfiles.getAll();
+			const selectedId = forceId || FilterProfiles.getActive()?.id || items[0]?.id || '';
+
+			selectEl.innerHTML = '';
+			items.forEach((item) => {
+				const option = document.createElement('option');
+				option.value = item.id;
+				option.textContent = item.name;
+				selectEl.appendChild(option);
+			});
+
+			const hasSelected = Array.from(selectEl.options).some((opt) => opt.value === selectedId);
+			selectEl.value = hasSelected ? selectedId : selectEl.options[0]?.value || '';
+			if (selectEl.value) {
+				FilterProfiles.setSelectedId(selectEl.value);
+				FilterProfiles.applyActive();
+			}
+
+			const hint = document.getElementById('hh-filter-profile-hint');
+			if (hint) {
+				const active = FilterProfiles.getActive();
+				if (!active) {
+					hint.textContent = 'Нет профилей';
+					return;
+				}
+				if (!STATE.settings.enableFilters) {
+					hint.textContent = 'Фильтрация выключена в этом профиле';
+					return;
+				}
+				const parts = [];
+				if (active.minSalary) parts.push(`от ${active.minSalary}`);
+				if (active.maxSalary) parts.push(`до ${active.maxSalary}`);
+				if (active.requiredKeywords?.length)
+					parts.push(`обязат.: ${active.requiredKeywords.length}`);
+				if (active.excludedKeywords?.length) parts.push(`искл.: ${active.excludedKeywords.length}`);
+				if (active.blacklistCompanies?.length)
+					parts.push(`блэклист: ${active.blacklistCompanies.length}`);
+				hint.textContent = parts.length
+					? parts.join(' · ')
+					: 'Фильтры включены, без доп. ограничений';
+			}
+		},
+
 		renderLimitChips: (container) => {
 			if (!container) return;
 			const presets = [10, 30, 50, 100, 200];
@@ -4584,11 +4959,12 @@
 	// ===== ИНИЦИАЛИЗАЦИЯ =====
 	function init() {
 		Utils.syncApiEndpoints();
-		console.log('🚀 HH.ru Auto Responder v2.2 загружен');
+		console.log('🚀 HH.ru Auto Responder v2.3 загружен');
 
 		// Загружаем конфигурацию
 		Utils.loadConfig();
 		CoverLetters.ensureMigrated();
+		FilterProfiles.ensureMigrated();
 
 		// Проверяем конфигурацию
 		if (!CONFIG.RESUME_HASH) {
