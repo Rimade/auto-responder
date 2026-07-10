@@ -757,6 +757,102 @@
 			}
 		},
 
+		makeDraggable: (element, handle) => {
+			if (!element || !handle || element.dataset.hhDraggable === '1') return;
+			element.dataset.hhDraggable = '1';
+			handle.classList.add('hh-drag-handle');
+			handle.style.cursor = 'grab';
+			handle.title = handle.title || 'Перетащите, чтобы переместить';
+
+			let dragging = false;
+			let startX = 0;
+			let startY = 0;
+			let originLeft = 0;
+			let originTop = 0;
+			let pointerId = null;
+
+			const isInteractive = (target) =>
+				!!target?.closest?.(
+					'button, a, input, select, textarea, label, option, [data-no-drag="1"]',
+				);
+
+			const switchToTopLeft = () => {
+				const rect = element.getBoundingClientRect();
+				element.style.top = `${rect.top}px`;
+				element.style.left = `${rect.left}px`;
+				element.style.right = 'auto';
+				element.style.bottom = 'auto';
+				element.style.transform = 'none';
+			};
+
+			const clamp = (left, top) => {
+				const rect = element.getBoundingClientRect();
+				const maxLeft = Math.max(0, window.innerWidth - Math.min(rect.width, window.innerWidth));
+				const maxTop = Math.max(0, window.innerHeight - 48);
+				return {
+					left: Math.min(Math.max(0, left), maxLeft),
+					top: Math.min(Math.max(0, top), maxTop),
+				};
+			};
+
+			const onPointerDown = (event) => {
+				if (event.button !== 0) return;
+				if (isInteractive(event.target)) return;
+
+				dragging = true;
+				pointerId = event.pointerId;
+				switchToTopLeft();
+				startX = event.clientX;
+				startY = event.clientY;
+				originLeft = parseFloat(element.style.left) || 0;
+				originTop = parseFloat(element.style.top) || 0;
+				handle.style.cursor = 'grabbing';
+				document.body.style.userSelect = 'none';
+				element.style.willChange = 'left, top';
+
+				try {
+					handle.setPointerCapture(event.pointerId);
+				} catch {
+					// ignore
+				}
+				event.preventDefault();
+			};
+
+			const onPointerMove = (event) => {
+				if (!dragging) return;
+				if (pointerId !== null && event.pointerId !== pointerId) return;
+
+				const next = clamp(
+					originLeft + (event.clientX - startX),
+					originTop + (event.clientY - startY),
+				);
+				element.style.left = `${next.left}px`;
+				element.style.top = `${next.top}px`;
+			};
+
+			const onPointerUp = (event) => {
+				if (!dragging) return;
+				if (pointerId !== null && event.pointerId !== pointerId) return;
+
+				dragging = false;
+				pointerId = null;
+				handle.style.cursor = 'grab';
+				document.body.style.userSelect = '';
+				element.style.willChange = '';
+
+				try {
+					handle.releasePointerCapture(event.pointerId);
+				} catch {
+					// ignore
+				}
+			};
+
+			handle.addEventListener('pointerdown', onPointerDown);
+			handle.addEventListener('pointermove', onPointerMove);
+			handle.addEventListener('pointerup', onPointerUp);
+			handle.addEventListener('pointercancel', onPointerUp);
+		},
+
 		getSmartDelay: () => {
 			if (!STATE.settings.smartDelay) {
 				return CONFIG.DELAY_BETWEEN_RESPONSES;
@@ -2037,8 +2133,10 @@
 				if (manualClearBtn) manualClearBtn.onclick = () => ManualQueue.clear();
 
 				document.body.appendChild(modal);
+				Utils.makeDraggable(modal, modal.querySelector('.modal-header'));
 			} else {
 				modal.style.display = STATE.modalVisible ? 'flex' : 'none';
+				Utils.makeDraggable(modal, modal.querySelector('.modal-header'));
 			}
 			return modal;
 		},
@@ -2862,6 +2960,7 @@
 			UI.renderSavedSearchesSettings(panel.querySelector('#hh-settings-searches'));
 			UI.refreshLetterSettings(panel);
 			UI.refreshFilterProfileSettings(panel);
+			Utils.makeDraggable(panel, panel.querySelector('.hh-settings-header'));
 			return panel;
 		},
 
@@ -4287,6 +4386,7 @@
 			uiContainer.appendChild(header);
 			uiContainer.appendChild(body);
 			container.appendChild(uiContainer);
+			Utils.makeDraggable(uiContainer, header);
 
 			// Создаем плавающую кнопку
 			UIBuilder.createFloatingButton();
@@ -4511,6 +4611,15 @@
 					padding: 14px 16px;
 					border-bottom: 1px solid rgba(238, 242, 247, 0.8);
 					background: #ffffff;
+				}
+				.hh-drag-handle {
+					touch-action: none;
+					user-select: none;
+				}
+				.hh-drag-handle .hh-ui-title,
+				.hh-drag-handle .hh-settings-title,
+				.hh-drag-handle .modal-title {
+					pointer-events: none;
 				}
 				.hh-ui-title {
 					margin: 0;
