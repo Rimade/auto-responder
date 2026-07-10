@@ -4146,6 +4146,8 @@
 
 			const container = document.querySelector('.supernova-navi-items') || document.body;
 
+			UIBuilder.injectPanelStyles();
+
 			const uiContainer = document.createElement('div');
 			uiContainer.id = 'hh-api-ui-container';
 			uiContainer.style.cssText = `
@@ -4155,21 +4157,45 @@
 				z-index: 9999;
 				display: flex;
 				flex-direction: column;
-				gap: 12px;
 				width: 400px;
+				max-width: calc(100vw - 40px);
+				max-height: calc(100vh - 120px);
+				overflow: hidden;
+				box-sizing: border-box;
 				font-family: system-ui, -apple-system, sans-serif;
+				border-radius: 16px;
+				background: rgba(255,255,255,0.98);
+				border: 1px solid #e5e7eb;
+				box-shadow: 0 8px 24px rgba(15,23,42,0.08);
 			`;
 
-			// Создаем элементы интерфейса
+			const header = document.createElement('div');
+			header.className = 'hh-ui-header';
+			header.innerHTML = `
+				<div class="hh-ui-title">HH Auto Responder</div>
+				<button type="button" id="hh-ui-close" class="hh-settings-close" title="Скрыть панель" aria-label="Скрыть панель">
+					<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true">
+						<path d="M18 6L6 18M6 6l12 12"/>
+					</svg>
+				</button>
+			`;
+			header.querySelector('#hh-ui-close').onclick = () => UI.toggleFloatingUI();
+
+			const body = document.createElement('div');
+			body.className = 'hh-ui-body';
+
 			const controlPanel = UIBuilder.createControlPanel();
 			const mainButton = UIBuilder.createMainButton();
 			const pauseButton = UIBuilder.createPauseButton();
 			const controlButtons = UIBuilder.createControlButtons();
 
-			uiContainer.appendChild(controlPanel);
-			uiContainer.appendChild(mainButton);
-			uiContainer.appendChild(pauseButton);
-			uiContainer.appendChild(controlButtons);
+			body.appendChild(controlPanel);
+			body.appendChild(mainButton);
+			body.appendChild(pauseButton);
+			body.appendChild(controlButtons);
+
+			uiContainer.appendChild(header);
+			uiContainer.appendChild(body);
 			container.appendChild(uiContainer);
 
 			// Создаем плавающую кнопку
@@ -4194,7 +4220,7 @@
 			UIBuilder.injectPanelStyles();
 
 			const panel = document.createElement('div');
-			panel.className = 'hh-panel';
+			panel.className = 'hh-panel hh-panel-embedded';
 			panel.innerHTML = `
 				<div class="hh-panel-section">
 					<div class="hh-panel-label">Поиск вакансий</div>
@@ -4378,6 +4404,41 @@
 					background: rgba(255,255,255,0.98);
 					border: 1px solid #e5e7eb;
 					box-shadow: 0 8px 24px rgba(15,23,42,0.08);
+				}
+				.hh-panel-embedded {
+					padding: 0;
+					border: none;
+					border-radius: 0;
+					background: transparent;
+					box-shadow: none;
+				}
+				.hh-ui-header {
+					display: flex;
+					align-items: center;
+					justify-content: space-between;
+					gap: 12px;
+					flex-shrink: 0;
+					padding: 14px 16px;
+					border-bottom: 1px solid #eef2f7;
+					background: rgba(255,255,255,0.96);
+					backdrop-filter: blur(8px);
+				}
+				.hh-ui-title {
+					margin: 0;
+					font-size: 15px;
+					font-weight: 700;
+					color: #0f172a;
+				}
+				.hh-ui-body {
+					flex: 1;
+					min-height: 0;
+					overflow-x: hidden;
+					overflow-y: auto;
+					padding: 16px;
+					display: flex;
+					flex-direction: column;
+					gap: 12px;
+					box-sizing: border-box;
 				}
 				.hh-panel-section { display: grid; gap: 10px; }
 				.hh-panel-label {
