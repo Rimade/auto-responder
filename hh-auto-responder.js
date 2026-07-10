@@ -1747,14 +1747,12 @@
 					flex-direction: column;
 					overflow: hidden;
 					box-sizing: border-box;
-					background: rgba(255, 255, 255, 0.84);
+					background: #ffffff;
 					border: 1px solid rgba(226, 232, 240, 0.75);
 					border-radius: 16px;
 					box-shadow: 0 16px 48px rgba(15, 23, 42, 0.14);
 					z-index: 10001;
 					font-family: system-ui, -apple-system, sans-serif;
-					backdrop-filter: blur(8px) saturate(1.15);
-					-webkit-backdrop-filter: blur(8px) saturate(1.15);
 				`;
 
 				modal.innerHTML = `
@@ -1777,9 +1775,7 @@
 							flex-shrink: 0;
 							padding: 16px 18px 14px;
 							border-bottom: 1px solid rgba(238, 242, 247, 0.8);
-							background: rgba(255, 255, 255, 0.72);
-							backdrop-filter: blur(6px);
-							-webkit-backdrop-filter: blur(6px);
+							background: #ffffff;
 						}
 						#hh-api-modal .modal-header-text { min-width: 0; flex: 1; }
 						#hh-api-modal .modal-title {
@@ -1808,12 +1804,10 @@
 							padding: 0;
 							border: 1px solid rgba(226, 232, 240, 0.9);
 							border-radius: 12px;
-							background: rgba(248, 250, 252, 0.85);
+							background: #f8fafc;
 							color: #64748b;
 							cursor: pointer;
 							flex-shrink: 0;
-							backdrop-filter: blur(4px);
-							-webkit-backdrop-filter: blur(4px);
 							transition: background .15s ease, border-color .15s ease, color .15s ease, transform .15s ease;
 						}
 						#hh-api-modal .modal-close:hover {
@@ -1829,7 +1823,7 @@
 							flex-shrink: 0;
 							margin: 12px 16px 0;
 							padding: 6px;
-							background: rgba(241, 245, 249, 0.7);
+							background: #f1f5f9;
 							border-radius: 14px;
 							border: 1px solid rgba(226, 232, 240, 0.8);
 						}
@@ -1894,11 +1888,11 @@
 							padding: 12px;
 							border: 1px solid rgba(226, 232, 240, 0.7);
 							border-radius: 12px;
-							background: rgba(255, 255, 255, 0.45);
+							background: #ffffff;
 							transition: background .15s ease, border-color .15s ease;
 						}
 						#hh-api-modal .log-item:hover {
-							background: rgba(248, 250, 252, 0.85);
+							background: #f8fafc;
 							border-color: #93c5fd;
 						}
 						#hh-api-modal .log-link {
@@ -1928,7 +1922,7 @@
 						#hh-api-modal .stats-container {
 							margin-top: 14px;
 							padding: 14px;
-							background: rgba(248, 250, 252, 0.55);
+							background: #f8fafc;
 							border-radius: 14px;
 							font-size: 13px;
 							color: #475569;
@@ -1952,7 +1946,7 @@
 							gap: 8px;
 							padding: 8px 10px;
 							border-radius: 10px;
-							background: rgba(255, 255, 255, 0.55);
+							background: #f8fafc;
 						}
 						#hh-api-modal .stats-label {
 							font-weight: 600;
@@ -1971,7 +1965,7 @@
 							line-height: 1.5;
 							padding: 10px 12px;
 							border-radius: 12px;
-							background: rgba(241, 245, 249, 0.65);
+							background: #f1f5f9;
 							border: 1px solid rgba(226, 232, 240, 0.8);
 						}
 						#hh-api-modal .manual-actions {
@@ -2453,12 +2447,10 @@
 				flex-direction: column;
 				overflow: hidden;
 				box-sizing: border-box;
-				background: rgba(255, 255, 255, 0.84);
+				background: #ffffff;
 				border: 1px solid rgba(226, 232, 240, 0.75);
 				border-radius: 20px;
 				box-shadow: 0 20px 60px rgba(15, 23, 42, 0.16);
-				backdrop-filter: blur(8px) saturate(1.15);
-				-webkit-backdrop-filter: blur(8px) saturate(1.15);
 				z-index: 10005;
 				font-family: system-ui, -apple-system, sans-serif;
 			`;
@@ -4262,11 +4254,9 @@
 				box-sizing: border-box;
 				font-family: system-ui, -apple-system, sans-serif;
 				border-radius: 16px;
-				background: rgba(255, 255, 255, 0.84);
+				background: #ffffff;
 				border: 1px solid rgba(226, 232, 240, 0.75);
 				box-shadow: 0 12px 40px rgba(15, 23, 42, 0.12);
-				backdrop-filter: blur(8px) saturate(1.15);
-				-webkit-backdrop-filter: blur(8px) saturate(1.15);
 			`;
 
 			const header = document.createElement('div');
@@ -4520,9 +4510,7 @@
 					flex-shrink: 0;
 					padding: 14px 16px;
 					border-bottom: 1px solid rgba(238, 242, 247, 0.8);
-					background: rgba(255, 255, 255, 0.72);
-					backdrop-filter: blur(6px);
-					-webkit-backdrop-filter: blur(6px);
+					background: #ffffff;
 				}
 				.hh-ui-title {
 					margin: 0;
@@ -4653,7 +4641,7 @@
 					gap: 6px;
 					padding: 6px;
 					margin-bottom: 24px;
-					background: rgba(241, 245, 249, 0.7);
+					background: #f1f5f9;
 					border-radius: 14px;
 					border: 1px solid rgba(226, 232, 240, 0.8);
 				}
@@ -4691,9 +4679,7 @@
 					flex-shrink: 0;
 					padding: 20px 24px 16px;
 					border-bottom: 1px solid rgba(238, 242, 247, 0.8);
-					background: rgba(255, 255, 255, 0.72);
-					backdrop-filter: blur(6px);
-					-webkit-backdrop-filter: blur(6px);
+					background: #ffffff;
 				}
 				.hh-settings-title {
 					margin: 0;
@@ -4710,12 +4696,10 @@
 					padding: 0;
 					border: 1px solid rgba(226, 232, 240, 0.9);
 					border-radius: 12px;
-					background: rgba(248, 250, 252, 0.85);
+					background: #f8fafc;
 					color: #64748b;
 					cursor: pointer;
 					flex-shrink: 0;
-					backdrop-filter: blur(4px);
-					-webkit-backdrop-filter: blur(4px);
 					transition: background .15s ease, border-color .15s ease, color .15s ease, transform .15s ease;
 				}
 				.hh-settings-close:hover {
@@ -4741,9 +4725,7 @@
 					flex-shrink: 0;
 					padding: 16px 24px 20px;
 					border-top: 1px solid rgba(238, 242, 247, 0.8);
-					background: rgba(255, 255, 255, 0.72);
-					backdrop-filter: blur(6px);
-					-webkit-backdrop-filter: blur(6px);
+					background: #ffffff;
 				}
 				.hh-settings-btn {
 					padding: 12px 24px;
