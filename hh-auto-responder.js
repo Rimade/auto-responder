@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name           HH.ru Custom Script
 // @namespace      http://tampermonkey.net/
-// @version        2.3
-// @description    Автооткликер на HeadHunter — поиски, письма, профили фильтров, бэкап
+// @version        2.4
+// @description    Автооткликер на HeadHunter — поиски, письма, фильтры, режимы скорости, бэкап
 // @author         Genzor
 // @match          https://hh.ru/*
 // @match          https://*.hh.ru/*
@@ -93,6 +93,7 @@
 			detailedLogging: true,
 			hideUIOnLoad: true,
 			randomCoverLetter: false,
+			speedMode: 'normal',
 		},
 	};
 
@@ -1431,6 +1432,81 @@
 		},
 	};
 
+	const SPEED_MODES = {
+		careful: {
+			id: 'careful',
+			name: 'Осторожный',
+			hint: 'Медленнее и безопаснее',
+			delayResponses: 6000,
+			delayPages: 10000,
+			sessionLimit: 20,
+			smartDelay: true,
+		},
+		normal: {
+			id: 'normal',
+			name: 'Обычный',
+			hint: 'Баланс скорости и риска',
+			delayResponses: 3000,
+			delayPages: 5000,
+			sessionLimit: 50,
+			smartDelay: true,
+		},
+		fast: {
+			id: 'fast',
+			name: 'Быстрый',
+			hint: 'Максимум откликов, выше риск',
+			delayResponses: 1500,
+			delayPages: 3000,
+			sessionLimit: 100,
+			smartDelay: false,
+		},
+	};
+
+	const SpeedModes = {
+		list: () => Object.values(SPEED_MODES),
+
+		getId: () => STATE.settings.speedMode || 'normal',
+
+		getActive: () => SPEED_MODES[SpeedModes.getId()] || SPEED_MODES.normal,
+
+		setId: (id) => {
+			STATE.settings.speedMode = SPEED_MODES[id] ? id : 'custom';
+		},
+
+		apply: (id) => {
+			const mode = SPEED_MODES[id];
+			if (!mode) return false;
+
+			CONFIG.DELAY_BETWEEN_RESPONSES = mode.delayResponses;
+			CONFIG.DELAY_BETWEEN_PAGES = mode.delayPages;
+			CONFIG.MAX_RESPONSES_PER_SESSION = Math.min(mode.sessionLimit, CONFIG.MAX_RESPONSES_PER_DAY);
+			STATE.settings.smartDelay = mode.smartDelay;
+			STATE.settings.speedMode = mode.id;
+			Utils.saveConfig();
+			return true;
+		},
+
+		syncFromConfig: () => {
+			const match = SpeedModes.list().find(
+				(mode) =>
+					mode.delayResponses === CONFIG.DELAY_BETWEEN_RESPONSES &&
+					mode.delayPages === CONFIG.DELAY_BETWEEN_PAGES &&
+					mode.sessionLimit === CONFIG.MAX_RESPONSES_PER_SESSION &&
+					mode.smartDelay === !!STATE.settings.smartDelay,
+			);
+			STATE.settings.speedMode = match?.id || 'custom';
+			return STATE.settings.speedMode;
+		},
+
+		formatHint: (id) => {
+			const mode = SPEED_MODES[id] || null;
+			if (!mode) {
+				return `Свой режим · пауза ${CONFIG.DELAY_BETWEEN_RESPONSES / 1000}с · страница ${CONFIG.DELAY_BETWEEN_PAGES / 1000}с · лимит ${CONFIG.MAX_RESPONSES_PER_SESSION}`;
+			}
+			return `${mode.hint} · пауза ${mode.delayResponses / 1000}с · страница ${mode.delayPages / 1000}с · лимит ${mode.sessionLimit}`;
+		},
+	};
+
 	const Backup = {
 		TYPE: 'hh-auto-responder-backup',
 		VERSION: 1,
@@ -2484,6 +2560,8 @@
 			};
 			panel.querySelector('#setting-smart-delay').onchange = () => {
 				STATE.settings.smartDelay = panel.querySelector('#setting-smart-delay').checked;
+				SpeedModes.syncFromConfig();
+				UIBuilder.renderSpeedModeChips(document.getElementById('hh-speed-chips'));
 				Utils.saveConfig();
 			};
 			panel.querySelector('#setting-hide-ui').onchange = () => {
@@ -3058,11 +3136,14 @@
 				detailedLogging: true,
 				hideUIOnLoad: true,
 				randomCoverLetter: false,
+				speedMode: 'normal',
 			});
 
 			Object.assign(CONFIG, {
 				RESUME_HASH: '',
 				MAX_RESPONSES_PER_SESSION: 50,
+				DELAY_BETWEEN_RESPONSES: 3000,
+				DELAY_BETWEEN_PAGES: 5000,
 				MIN_SALARY: 0,
 				MAX_SALARY: 0,
 				SKIP_WITHOUT_SALARY: false,
@@ -3088,6 +3169,8 @@
 			}
 			UIBuilder.refreshLetterSelect(document.getElementById('hh-letter-select'));
 			UIBuilder.refreshFilterProfileSelect(document.getElementById('hh-filter-profile-select'));
+			UIBuilder.renderSpeedModeChips(document.getElementById('hh-speed-chips'));
+			UIBuilder.renderLimitChips(document.getElementById('hh-limit-chips'));
 		},
 
 		openSettings: () => {
@@ -4153,6 +4236,11 @@
 					<div id="hh-filter-profile-hint" class="hh-hint"></div>
 				</div>
 				<div class="hh-panel-section">
+					<div class="hh-panel-label">Режим скорости</div>
+					<div id="hh-speed-chips" class="hh-chips"></div>
+					<div id="hh-speed-hint" class="hh-hint"></div>
+				</div>
+				<div class="hh-panel-section">
 					<div class="hh-panel-label">Лимит за запуск</div>
 					<div id="hh-limit-chips" class="hh-chips"></div>
 					<div class="hh-limit-custom">
@@ -4165,6 +4253,7 @@
 			UIBuilder.refreshSearchSelect(panel.querySelector('#hh-search-select'));
 			UIBuilder.refreshLetterSelect(panel.querySelector('#hh-letter-select'));
 			UIBuilder.refreshFilterProfileSelect(panel.querySelector('#hh-filter-profile-select'));
+			UIBuilder.renderSpeedModeChips(panel.querySelector('#hh-speed-chips'));
 			UIBuilder.renderLimitChips(panel.querySelector('#hh-limit-chips'));
 			UIBuilder.syncRandomLetterUI(panel);
 
@@ -4294,7 +4383,9 @@
 						CONFIG.MAX_RESPONSES_PER_DAY,
 					);
 					limitInput.value = CONFIG.MAX_RESPONSES_PER_SESSION;
+					SpeedModes.syncFromConfig();
 					UIBuilder.renderLimitChips(panel.querySelector('#hh-limit-chips'));
+					UIBuilder.renderSpeedModeChips(panel.querySelector('#hh-speed-chips'));
 					Utils.saveConfig();
 				};
 			}
@@ -4681,6 +4772,44 @@
 			}
 		},
 
+		renderSpeedModeChips: (container) => {
+			if (!container) return;
+			SpeedModes.syncFromConfig();
+			container.innerHTML = '';
+
+			SpeedModes.list().forEach((mode) => {
+				const chip = document.createElement('button');
+				chip.type = 'button';
+				chip.className = `hh-chip${STATE.settings.speedMode === mode.id ? ' active' : ''}`;
+				chip.textContent = mode.name;
+				chip.title = SpeedModes.formatHint(mode.id);
+				chip.onclick = () => {
+					SpeedModes.apply(mode.id);
+					UIBuilder.renderSpeedModeChips(container);
+					UIBuilder.renderLimitChips(document.getElementById('hh-limit-chips'));
+					const limitInput = document.getElementById('hh-session-limit');
+					if (limitInput) limitInput.value = CONFIG.MAX_RESPONSES_PER_SESSION;
+					const smartDelayEl = document.querySelector('#setting-smart-delay');
+					if (smartDelayEl) smartDelayEl.checked = STATE.settings.smartDelay;
+					UI.showNotification('Режим', `${mode.name}: ${mode.hint}`, 'info', 2500);
+				};
+				container.appendChild(chip);
+			});
+
+			if (STATE.settings.speedMode === 'custom') {
+				const customChip = document.createElement('button');
+				customChip.type = 'button';
+				customChip.className = 'hh-chip active';
+				customChip.textContent = 'Свой';
+				customChip.title = SpeedModes.formatHint('custom');
+				customChip.disabled = true;
+				container.appendChild(customChip);
+			}
+
+			const hint = document.getElementById('hh-speed-hint');
+			if (hint) hint.textContent = SpeedModes.formatHint(STATE.settings.speedMode);
+		},
+
 		renderLimitChips: (container) => {
 			if (!container) return;
 			const presets = [10, 30, 50, 100, 200];
@@ -4695,7 +4824,9 @@
 					CONFIG.MAX_RESPONSES_PER_SESSION = Math.min(value, CONFIG.MAX_RESPONSES_PER_DAY);
 					const limitInput = document.getElementById('hh-session-limit');
 					if (limitInput) limitInput.value = CONFIG.MAX_RESPONSES_PER_SESSION;
+					SpeedModes.syncFromConfig();
 					UIBuilder.renderLimitChips(container);
+					UIBuilder.renderSpeedModeChips(document.getElementById('hh-speed-chips'));
 					Utils.saveConfig();
 				};
 				container.appendChild(chip);
@@ -4959,12 +5090,13 @@
 	// ===== ИНИЦИАЛИЗАЦИЯ =====
 	function init() {
 		Utils.syncApiEndpoints();
-		console.log('🚀 HH.ru Auto Responder v2.3 загружен');
+		console.log('🚀 HH.ru Auto Responder v2.4 загружен');
 
 		// Загружаем конфигурацию
 		Utils.loadConfig();
 		CoverLetters.ensureMigrated();
 		FilterProfiles.ensureMigrated();
+		SpeedModes.syncFromConfig();
 
 		// Проверяем конфигурацию
 		if (!CONFIG.RESUME_HASH) {
