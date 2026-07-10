@@ -1728,7 +1728,12 @@
 	const UI = {
 		createModal: () => {
 			let modal = document.getElementById('hh-api-modal');
+			if (modal && !modal.querySelector('.modal-body')) {
+				modal.remove();
+				modal = null;
+			}
 			if (!modal) {
+				UIBuilder.injectPanelStyles();
 				modal = document.createElement('div');
 				modal.id = 'hh-api-modal';
 				modal.style.cssText = `
@@ -1736,190 +1741,120 @@
 					bottom: 140px;
 					right: 20px;
 					width: 450px;
-					max-height: 600px;
-					overflow-y: auto;
+					max-width: calc(100vw - 40px);
+					max-height: min(600px, calc(100vh - 160px));
+					display: ${STATE.modalVisible ? 'flex' : 'none'};
+					flex-direction: column;
+					overflow: hidden;
+					box-sizing: border-box;
 					background: rgba(255, 255, 255, 0.62);
 					border: 1px solid rgba(226, 232, 240, 0.75);
 					border-radius: 16px;
 					box-shadow: 0 16px 48px rgba(15, 23, 42, 0.14);
 					z-index: 10001;
 					font-family: system-ui, -apple-system, sans-serif;
-					padding: 24px;
-					display: ${STATE.modalVisible ? 'block' : 'none'};
 					backdrop-filter: blur(18px) saturate(1.35);
 					-webkit-backdrop-filter: blur(18px) saturate(1.35);
-					transition: all 0.3s ease;
 				`;
 
 				modal.innerHTML = `
 					<style>
 						#hh-api-modal {
 							scrollbar-width: thin;
-							scrollbar-color: #cbd5e0 #f7fafc;
+							scrollbar-color: #94a3b8 transparent;
 						}
-						#hh-api-modal::-webkit-scrollbar {
-							width: 6px;
+						#hh-api-modal .modal-body::-webkit-scrollbar { width: 6px; }
+						#hh-api-modal .modal-body::-webkit-scrollbar-track { background: transparent; }
+						#hh-api-modal .modal-body::-webkit-scrollbar-thumb {
+							background: rgba(148, 163, 184, 0.7);
+							border-radius: 999px;
 						}
-						#hh-api-modal::-webkit-scrollbar-track {
-							background: #f7fafc;
-							border-radius: 3px;
-						}
-						#hh-api-modal::-webkit-scrollbar-thumb {
-							background: #cbd5e0;
-							border-radius: 3px;
-						}
-						.modal-header {
-							position: relative;
+						#hh-api-modal .modal-header {
 							display: flex;
+							align-items: flex-start;
 							justify-content: space-between;
-							align-items: center;
-							margin-bottom: 20px;
-							padding-bottom: 16px;
-							border-bottom: 2px solid #f1f5f9;
+							gap: 12px;
+							flex-shrink: 0;
+							padding: 16px 18px 14px;
+							border-bottom: 1px solid rgba(238, 242, 247, 0.8);
+							background: rgba(255, 255, 255, 0.4);
+							backdrop-filter: blur(12px);
+							-webkit-backdrop-filter: blur(12px);
 						}
-						.modal-title {
-							font-size: 20px;
+						#hh-api-modal .modal-header-text { min-width: 0; flex: 1; }
+						#hh-api-modal .modal-title {
+							font-size: 18px;
 							font-weight: 700;
-							color: #1e293b;
+							color: #0f172a;
 							margin: 0;
 							display: flex;
 							align-items: center;
 							gap: 8px;
+							letter-spacing: -0.01em;
 						}
-						.modal-close {
-							position: absolute;
-							top: 20px;
-							right: 20px;
-							background: rgba(248, 250, 252, 0.8);
-							border: 1px solid rgba(226, 232, 240, 0.9);
-							font-size: 24px;
-							cursor: pointer;
-							color: #64748b;
-							padding: 8px;
-							border-radius: 8px;
-							transition: all 0.2s ease;
-							line-height: 1;
-							z-index: 10002;
-							backdrop-filter: blur(8px);
-							-webkit-backdrop-filter: blur(8px);
-							box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
-						}
-						.modal-close:hover {
-							background: rgba(241, 245, 249, 0.95);
-							color: #1e293b;
-						}
-						.log-list {
-							list-style: none;
-							padding: 0;
-							margin: 0;
-						}
-						.log-item {
-							display: flex;
-							align-items: flex-start;
-							padding: 16px 0;
-							border-bottom: 1px solid #f1f5f9;
-							transition: all 0.2s ease;
-						}
-						.log-item:hover {
-							background: #f8fafc;
-							margin: 0 -12px;
-							padding: 16px 12px;
-							border-radius: 12px;
-						}
-						.log-item:last-child {
-							border-bottom: none;
-						}
-						.log-link {
-							color: #1e40af;
-							text-decoration: none;
-							font-size: 14px;
-							flex: 1;
-							transition: color 0.2s ease;
-							line-height: 1.5;
-							font-weight: 500;
-						}
-						.log-link:hover {
-							color: #1d4ed8;
-						}
-						.log-symbol {
-							font-size: 20px;
-							margin-right: 12px;
-							margin-top: 2px;
-						}
-						.log-time {
-							font-size: 11px;
-							color: #64748b;
-							margin-left: 12px;
-							white-space: nowrap;
-							font-weight: 500;
-						}
-						.stats-container {
-							margin-top: 20px;
-							padding: 16px;
-							background: rgba(248, 250, 252, 0.55);
-							border-radius: 16px;
-							font-size: 13px;
-							color: #475569;
-							border: 1px solid rgba(226, 232, 240, 0.75);
-							backdrop-filter: blur(8px);
-							-webkit-backdrop-filter: blur(8px);
-						}
-						.stats-title {
-							font-weight: 700;
-							margin-bottom: 12px;
-							color: #1e293b;
-							font-size: 16px;
-						}
-						.stats-grid {
-							display: grid;
-							grid-template-columns: 1fr 1fr;
-							gap: 12px;
-							margin-top: 12px;
-						}
-						.stats-item {
-							display: flex;
-							justify-content: space-between;
-							align-items: center;
-							padding: 8px 0;
-						}
-						.stats-label {
-							font-weight: 600;
-							color: #374151;
-						}
-						.stats-value {
-							font-weight: 700;
-							color: #1e40af;
-						}
-						.modal-progress {
+						#hh-api-modal .modal-progress {
 							margin-top: 6px;
 							font-size: 12px;
 							color: #64748b;
 							font-weight: 500;
+							line-height: 1.4;
 						}
-						.modal-tabs {
-							display: flex;
-							gap: 8px;
-							margin-bottom: 16px;
-							border-bottom: 1px solid #e2e8f0;
-							padding-bottom: 8px;
+						#hh-api-modal .modal-close {
+							display: inline-flex;
+							align-items: center;
+							justify-content: center;
+							width: 40px;
+							height: 40px;
+							padding: 0;
+							border: 1px solid rgba(226, 232, 240, 0.9);
+							border-radius: 12px;
+							background: rgba(248, 250, 252, 0.85);
+							color: #64748b;
+							cursor: pointer;
+							flex-shrink: 0;
+							backdrop-filter: blur(8px);
+							-webkit-backdrop-filter: blur(8px);
+							transition: background .15s ease, border-color .15s ease, color .15s ease, transform .15s ease;
 						}
-						.modal-tab {
-							flex: 1;
+						#hh-api-modal .modal-close:hover {
+							background: #fee2e2;
+							border-color: #fecaca;
+							color: #dc2626;
+						}
+						#hh-api-modal .modal-close:active { transform: scale(0.96); }
+						#hh-api-modal .modal-tabs {
+							display: grid;
+							grid-template-columns: 1fr 1fr;
+							gap: 6px;
+							flex-shrink: 0;
+							margin: 12px 16px 0;
+							padding: 6px;
+							background: rgba(241, 245, 249, 0.7);
+							border-radius: 14px;
+							border: 1px solid rgba(226, 232, 240, 0.8);
+						}
+						#hh-api-modal .modal-tab {
 							border: none;
 							background: transparent;
 							padding: 10px 12px;
 							border-radius: 10px;
+							font: inherit;
 							font-size: 13px;
-							font-weight: 600;
+							font-weight: 700;
 							color: #64748b;
 							cursor: pointer;
-							transition: all 0.2s ease;
+							transition: background .15s ease, color .15s ease, box-shadow .15s ease;
 						}
-						.modal-tab.active {
-							background: #eff6ff;
-							color: #1d4ed8;
+						#hh-api-modal .modal-tab:hover {
+							color: #0f172a;
+							background: rgba(255,255,255,0.55);
 						}
-						.modal-badge {
+						#hh-api-modal .modal-tab.active {
+							background: #fff;
+							color: #0f172a;
+							box-shadow: 0 1px 3px rgba(15,23,42,0.08);
+						}
+						#hh-api-modal .modal-badge {
 							display: inline-flex;
 							min-width: 18px;
 							height: 18px;
@@ -1931,23 +1866,121 @@
 							align-items: center;
 							justify-content: center;
 							margin-left: 4px;
+							vertical-align: middle;
 						}
-						.modal-tab.active .modal-badge {
+						#hh-api-modal .modal-tab.active .modal-badge {
 							background: #dbeafe;
 							color: #1d4ed8;
 						}
-						.manual-hint {
+						#hh-api-modal .modal-body {
+							flex: 1;
+							min-height: 0;
+							overflow-x: hidden;
+							overflow-y: auto;
+							padding: 14px 16px 18px;
+							box-sizing: border-box;
+						}
+						#hh-api-modal .log-list {
+							list-style: none;
+							padding: 0;
+							margin: 0;
+							display: grid;
+							gap: 6px;
+						}
+						#hh-api-modal .log-item {
+							display: flex;
+							align-items: flex-start;
+							gap: 10px;
+							padding: 12px;
+							border: 1px solid rgba(226, 232, 240, 0.7);
+							border-radius: 12px;
+							background: rgba(255, 255, 255, 0.45);
+							transition: background .15s ease, border-color .15s ease;
+						}
+						#hh-api-modal .log-item:hover {
+							background: rgba(248, 250, 252, 0.85);
+							border-color: #93c5fd;
+						}
+						#hh-api-modal .log-link {
+							color: #1e40af;
+							text-decoration: none;
+							font-size: 14px;
+							flex: 1;
+							min-width: 0;
+							line-height: 1.45;
+							font-weight: 500;
+							word-break: break-word;
+						}
+						#hh-api-modal .log-link:hover { color: #1d4ed8; }
+						#hh-api-modal .log-symbol {
+							font-size: 16px;
+							line-height: 1.4;
+							flex-shrink: 0;
+						}
+						#hh-api-modal .log-time {
+							font-size: 11px;
+							color: #64748b;
+							white-space: nowrap;
+							font-weight: 500;
+							flex-shrink: 0;
+							padding-top: 2px;
+						}
+						#hh-api-modal .stats-container {
+							margin-top: 14px;
+							padding: 14px;
+							background: rgba(248, 250, 252, 0.55);
+							border-radius: 14px;
+							font-size: 13px;
+							color: #475569;
+							border: 1px solid rgba(226, 232, 240, 0.75);
+						}
+						#hh-api-modal .stats-title {
+							font-weight: 700;
+							margin-bottom: 10px;
+							color: #0f172a;
+							font-size: 14px;
+						}
+						#hh-api-modal .stats-grid {
+							display: grid;
+							grid-template-columns: 1fr 1fr;
+							gap: 8px;
+						}
+						#hh-api-modal .stats-item {
+							display: flex;
+							justify-content: space-between;
+							align-items: center;
+							gap: 8px;
+							padding: 8px 10px;
+							border-radius: 10px;
+							background: rgba(255, 255, 255, 0.55);
+						}
+						#hh-api-modal .stats-label {
+							font-weight: 600;
+							color: #475569;
+							font-size: 12px;
+						}
+						#hh-api-modal .stats-value {
+							font-weight: 700;
+							color: #1d4ed8;
+							font-size: 13px;
+						}
+						#hh-api-modal .manual-hint {
 							font-size: 13px;
 							color: #64748b;
 							margin-bottom: 12px;
 							line-height: 1.5;
+							padding: 10px 12px;
+							border-radius: 12px;
+							background: rgba(241, 245, 249, 0.65);
+							border: 1px solid rgba(226, 232, 240, 0.8);
 						}
-						.manual-actions {
+						#hh-api-modal .manual-actions {
 							display: flex;
 							gap: 8px;
 							margin-left: auto;
+							flex-shrink: 0;
 						}
-						.manual-remove {
+						#hh-api-modal .manual-remove {
 							border: none;
 							background: #fee2e2;
 							color: #b91c1c;
@@ -1955,37 +1988,44 @@
 							padding: 4px 8px;
 							cursor: pointer;
 							font-size: 12px;
+							font-weight: 600;
 						}
 						@media (max-width: 600px) {
 							#hh-api-modal {
-								width: 90%;
-								right: 5%;
-								bottom: 120px;
+								width: 90% !important;
+								right: 5% !important;
+								bottom: 120px !important;
 							}
 						}
 					</style>
 					<div class="modal-header">
-						<div>
-							<h3 class="modal-title">📤 Отклики</h3>
+						<div class="modal-header-text">
+							<h3 class="modal-title">Отклики</h3>
 							<div id="hh-modal-progress" class="modal-progress" style="display:none;"></div>
 						</div>
-						<button class="modal-close">×</button>
+						<button type="button" class="modal-close" title="Закрыть" aria-label="Закрыть">
+							<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true">
+								<path d="M18 6L6 18M6 6l12 12"/>
+							</svg>
+						</button>
 					</div>
 					<div class="modal-tabs">
 						<button type="button" class="modal-tab active" data-tab="responses">История</button>
 						<button type="button" class="modal-tab" data-tab="manual">Вручную <span id="hh-manual-badge" class="modal-badge">0</span></button>
 					</div>
-					<div id="hh-tab-responses" class="modal-tab-panel">
-						<ul class="log-list"></ul>
-						<div class="stats-container">
-							<div class="stats-title">📊 Статистика</div>
-							<div class="stats-grid"></div>
+					<div class="modal-body">
+						<div id="hh-tab-responses" class="modal-tab-panel">
+							<ul class="log-list"></ul>
+							<div class="stats-container">
+								<div class="stats-title">Статистика</div>
+								<div class="stats-grid"></div>
+							</div>
 						</div>
-					</div>
-					<div id="hh-tab-manual" class="modal-tab-panel" style="display:none;">
-						<div class="manual-hint">Вакансии с тестом или обязательным письмом — откликнитесь сами.</div>
-						<ul id="hh-manual-list" class="log-list"></ul>
-						<button type="button" id="hh-manual-clear" class="hh-btn-ghost" style="width:100%;margin-top:12px;">Очистить список</button>
+						<div id="hh-tab-manual" class="modal-tab-panel" style="display:none;">
+							<div class="manual-hint">Вакансии с тестом или обязательным письмом — откликнитесь сами.</div>
+							<ul id="hh-manual-list" class="log-list"></ul>
+							<button type="button" id="hh-manual-clear" class="hh-btn-ghost" style="width:100%;margin-top:12px;">Очистить список</button>
+						</div>
 					</div>
 				`;
 
@@ -2004,7 +2044,7 @@
 
 				document.body.appendChild(modal);
 			} else {
-				modal.style.display = STATE.modalVisible ? 'block' : 'none';
+				modal.style.display = STATE.modalVisible ? 'flex' : 'none';
 			}
 			return modal;
 		},
@@ -2107,11 +2147,6 @@
 			const statsGrid = modal.querySelector('.stats-grid');
 
 			if (!list) return;
-
-			// Обновляем позицию крестика при обновлении модального окна
-			if (modal._updateClosePosition) {
-				setTimeout(() => modal._updateClosePosition(), 0);
-			}
 
 			// Добавляем новую запись
 			try {
@@ -2272,7 +2307,7 @@
 			const modal = document.getElementById('hh-api-modal');
 			if (modal) {
 				STATE.modalVisible = !STATE.modalVisible;
-				modal.style.display = STATE.modalVisible ? 'block' : 'none';
+				modal.style.display = STATE.modalVisible ? 'flex' : 'none';
 				if (STATE.modalVisible) {
 					UI.updateModal();
 				}
@@ -2283,7 +2318,7 @@
 			STATE.modalVisible = true;
 			const modal = document.getElementById('hh-api-modal');
 			if (modal) {
-				modal.style.display = 'block';
+				modal.style.display = 'flex';
 				UI.updateModal();
 			}
 		},
